@@ -1,84 +1,114 @@
 "use client";
 
-import { useState } from "react";
-import { supabase } from "@/lib/supabaseClient";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { supabase } from "@/lib/supabaseClient";
 
-export default function AdminLogin() {
+export default function AdminLoginPage() {
   const router = useRouter();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function handleLogin(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setMsg(null);
+  // ✅ Si ya hay sesión, redirige correctamente (orders vs onboarding)
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      if (data.user) {
+        await redirectAfterLogin(data.user.id);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    setLoading(false);
+  async function redirectAfterLogin(userId: string) {
+    // Verifica si ya existe restaurante para ese owner
+    const { data: r, error } = await supabase
+      .from("restaurants")
+      .select("id")
+      .eq("owner_id", userId)
+      .maybeSingle();
 
-    if (error) return setMsg(error.message);
+    // Si hay error raro, por seguridad manda a onboarding
+    if (error) {
+      console.error("redirectAfterLogin error:", error);
+      router.replace("/admin/onboarding");
+      return;
+    }
 
-    router.push("/admin/onboarding");
+    if (r?.id) {
+      router.replace("/admin/orders");
+    } else {
+      router.replace("/admin/onboarding");
+    }
   }
 
-  async function handleSignup() {
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
     setLoading(true);
-    setMsg(null);
 
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+
     setLoading(false);
 
-    if (error) return setMsg(error.message);
+    if (error || !data.user) {
+      alert(error?.message || "No se pudo iniciar sesión.");
+      return;
+    }
 
-    setMsg("Cuenta creada. Ahora inicia sesión.");
+    await redirectAfterLogin(data.user.id);
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <form onSubmit={handleLogin} className="w-full max-w-sm rounded-2xl border p-6 space-y-4">
-        <h1 className="text-xl font-semibold">Admin</h1>
-        <p className="text-sm opacity-80">Inicia sesión para gestionar tu negocio.</p>
+    <div className="min-h-screen bg-black text-white">
+      <div className="max-w-md mx-auto px-6 py-14">
+        <h1 className="text-2xl font-semibold tracking-tight">Admin</h1>
+        <p className="text-sm text-white/60 mt-2">
+          Inicia sesión para ver tus pedidos.
+        </p>
 
-        <input
-          className="w-full border rounded-lg p-3"
-          placeholder="correo@ejemplo.com"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          type="email"
-          required
-        />
-
-        <input
-          className="w-full border rounded-lg p-3"
-          placeholder="contraseña"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          type="password"
-          required
-        />
-
-        {msg ? <div className="text-sm">{msg}</div> : null}
-
-        <button
-          className="w-full rounded-lg p-3 border hover:bg-black/5 disabled:opacity-60"
-          disabled={loading}
-          type="submit"
+        <form
+          onSubmit={onSubmit}
+          className="mt-8 rounded-3xl border border-white/10 bg-white/5 p-6 space-y-4"
         >
-          {loading ? "..." : "Iniciar sesión"}
-        </button>
+          <input
+            className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
+            placeholder="Correo"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+          />
 
-        <button
-          type="button"
-          className="w-full rounded-lg p-3 border hover:bg-black/5 disabled:opacity-60"
-          disabled={loading}
-          onClick={handleSignup}
-        >
-          {loading ? "..." : "Crear cuenta"}
-        </button>
-      </form>
+          <input
+            className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
+            placeholder="Contraseña"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full rounded-2xl border border-white/15 bg-white/10 hover:bg-white/15 transition px-4 py-3 text-sm font-medium disabled:opacity-50"
+          >
+            {loading ? "Entrando..." : "Entrar"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => router.push("/admin/forgot")}
+            className="w-full text-sm text-white/70 hover:text-white transition"
+          >
+            ¿Olvidaste tu contraseña?
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
