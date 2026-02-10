@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 
@@ -30,8 +29,10 @@ type Order = {
   address: any | null;
   archived_at: string | null;
 
-  // ✅ para tracking público
   public_tracking_token: string | null;
+
+  // Si existe en tu tabla orders:
+  notes?: string | null;
 
   order_items: OrderItem[];
 };
@@ -88,6 +89,14 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+const LS_SOUND = "orders_sound_enabled_v1";
+
+type Toast = {
+  id: string;
+  title: string;
+  message?: string;
+};
+
 export default function AdminOrders() {
   const router = useRouter();
 
@@ -100,8 +109,96 @@ export default function AdminOrders() {
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
 
-  // ✅ feedback UX
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // ✅ Contador de “nuevos”
+  const [newCount, setNewCount] = useState(0);
+
+  // ✅ Sonido persistente
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  // ✅ Toasts
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  function pushToast(t: Omit<Toast, "id">) {
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const toast: Toast = { id, ...t };
+    setToasts((prev) => [toast, ...prev].slice(0, 3));
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((x) => x.id !== id));
+    }, 3800);
+  }
+
+  function dismissToast(id: string) {
+    setToasts((prev) => prev.filter((x) => x.id !== id));
+  }
+
+  // ✅ init
+  useEffect(() => {
+    try {
+      const s = localStorage.getItem(LS_SOUND);
+      setSoundEnabled(s === "1");
+    } catch {}
+
+    audioRef.current = new Audio("/sounds/new-order.mp3");
+    audioRef.current.preload = "auto";
+    audioRef.current.volume = 0.7;
+
+    const onFocus = () => setNewCount(0);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
+  // ✅ Activar sonido: desbloquea autoplay con click
+  async function enableSound() {
+    try {
+      if (!audioRef.current) audioRef.current = new Audio("/sounds/new-order.mp3");
+      audioRef.current.currentTime = 0;
+
+      // intento de play para “desbloquear”
+      await audioRef.current.play();
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+
+      setSoundEnabled(true);
+      try {
+        localStorage.setItem(LS_SOUND, "1");
+      } catch {}
+    } catch (e) {
+      alert("El navegador bloqueó el audio. Haz click dentro de la página y vuelve a intentar.");
+      console.error(e);
+    }
+  }
+
+  function disableSound() {
+    setSoundEnabled(false);
+    try {
+      localStorage.setItem(LS_SOUND, "0");
+    } catch {}
+  }
+
+  function playNewOrderSound() {
+    if (!soundEnabled) return;
+    try {
+      if (!audioRef.current) audioRef.current = new Audio("/sounds/new-order.mp3");
+      audioRef.current.currentTime = 0;
+      audioRef.current.play().catch(() => {});
+    } catch {}
+  }
+
+  function notifyNewOrder() {
+    setNewCount((c) => c + 1);
+
+    // ✅ Toast iOS
+    pushToast({
+      title: "Nuevo pedido",
+      message: "Entró un pedido nuevo. Revisa la lista.",
+    });
+
+    // ✅ Solo tu mp3 (sin sonido del sistema)
+    playNewOrderSound();
+  }
 
   function getTrackingUrl(token: string) {
     return `${window.location.origin}/t/${token}`;
@@ -147,7 +244,7 @@ export default function AdminOrders() {
     let q = supabase
       .from("orders")
       .select(
-        "id,folio,status,customer_name,customer_phone,total,subtotal,delivery_fee,created_at,delivery_type,address,archived_at,public_tracking_token"
+        "id,folio,status,customer_name,customer_phone,total,subtotal,delivery_fee,created_at,delivery_type,address,archived_at,public_tracking_token,notes"
       )
       .eq("restaurant_id", rest.id);
 
@@ -194,36 +291,46 @@ export default function AdminOrders() {
     setLoading(false);
   }
 
+  // ✅ carga inicial
   useEffect(() => {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ al cambiar archivados
   useEffect(() => {
     if (!restaurant) return;
     loadAll(restaurant);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showArchived]);
 
+  // ✅ REALTIME (INSERT) → toast + sonido + refresh
   useEffect(() => {
     if (!restaurant?.id) return;
 
     const channel = supabase
-      .channel("orders-realtime")
+      .channel(`orders-realtime-${restaurant.id}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "orders", filter: `restaurant_id=eq.${restaurant.id}` },
-        () => {
-          if (restaurant) loadAll(restaurant);
+        { event: "INSERT", schema: "public", table: "orders", filter: `restaurant_id=eq.${restaurant.id}` },
+        async (payload) => {
+          console.log("🟢 INSERT order realtime:", payload);
+
+          // si estás viendo archivados, no molestamos
+          if (!showArchived) notifyNewOrder();
+
+          await loadAll(restaurant);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log("🔌 Realtime status:", status);
+      });
 
     return () => {
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restaurant?.id]);
+  }, [restaurant?.id, showArchived, soundEnabled]);
 
   async function setStatus(orderId: string, status: (typeof STATUS_KEYS)[number]) {
     if (!restaurant?.id) return;
@@ -305,7 +412,6 @@ export default function AdminOrders() {
 
   const filtered = useMemo(() => {
     let base = filter === "all" ? orders : orders.filter((o) => o.status === filter);
-
     const q = normalize(search);
     if (!q) return base;
 
@@ -335,7 +441,6 @@ export default function AdminOrders() {
     if (!o.public_tracking_token) return;
 
     const url = getTrackingUrl(o.public_tracking_token);
-
     const itemsText =
       (o.order_items ?? []).map((it) => `• ${it.qty}× ${it.name_snapshot}`).join("\n") || "• (sin productos)";
 
@@ -343,17 +448,14 @@ export default function AdminOrders() {
     const estado = o.status in STATUS_LABEL ? STATUS_LABEL[o.status as keyof typeof STATUS_LABEL] : o.status;
 
     const msg =
-      `Hola! ${o.customer_name || ""} \n` +
+      `Hola! ${o.customer_name || ""}\n` +
       `Tu pedido #${o.folio} está: *${estado}*\n\n` +
-      `*Resumen*\n` +
-      `${tipo}\n\n` +
-      `*Productos*\n` +
-      `${itemsText}\n\n` +
+      `*Resumen*\n${tipo}\n\n` +
+      `*Productos*\n${itemsText}\n\n` +
       `*Total:* ${money(o.total)}\n\n` +
       `Seguimiento:\n${url}`;
 
-    const link = waLink(o.customer_phone, msg);
-    window.open(link, "_blank", "noopener,noreferrer");
+    window.open(waLink(o.customer_phone, msg), "_blank", "noopener,noreferrer");
   }
 
   function openTracking(o: Order) {
@@ -361,54 +463,98 @@ export default function AdminOrders() {
     window.open(`/t/${o.public_tracking_token}`, "_blank", "noopener,noreferrer");
   }
 
-  // ✅ UI: acento fijo (puedes después leerlo desde restaurants.accent_color si quieres)
-  const accent = "#ff3b30";
-
   return (
     <div className="min-h-screen bg-black text-white">
-      {/* fondo bonito */}
-      <div
-        className="pointer-events-none fixed inset-0 opacity-60"
-        style={{
-          background:
-            `radial-gradient(1200px 600px at 20% 10%, ${accent}22 0%, transparent 60%),` +
-            `radial-gradient(900px 500px at 80% 20%, #ff950022 0%, transparent 55%),` +
-            `radial-gradient(700px 450px at 40% 90%, #ffcc0020 0%, transparent 55%)`,
-        }}
-      />
-
-      {/* Header */}
-      <header className="sticky top-0 z-20 border-b border-white/10 bg-black/70 backdrop-blur-xl">
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-start justify-between gap-4">
-          <div>
-            <div className="text-2xl font-semibold tracking-tight">Pedidos</div>
-            <div className="text-sm text-white/55">{restaurant ? restaurant.name : "Cargando..."}</div>
-
-            {restaurant?.slug ? (
-              <div className="text-xs text-white/45 mt-1">
-                Link público: <span className="font-mono">/r/{restaurant.slug}</span>
+      {/* ✅ TOASTS */}
+      <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-3 w-[min(360px,calc(100vw-2rem))]">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className={[
+              "rounded-3xl border border-white/12 bg-black/70 backdrop-blur-xl",
+              "shadow-[0_18px_60px_rgba(0,0,0,0.55)]",
+              "px-4 py-3",
+              "animate-toast-in",
+            ].join(" ")}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">🛎️</span>
+                  <div className="text-sm font-semibold truncate">{t.title}</div>
+                </div>
+                {t.message ? <div className="text-xs text-white/65 mt-1">{t.message}</div> : null}
               </div>
+
+              <button
+                onClick={() => dismissToast(t.id)}
+                className="shrink-0 px-2 py-1 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition text-xs"
+                title="Cerrar"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-3 h-[2px] w-full rounded-full overflow-hidden bg-white/10">
+              <div className="h-full w-full bg-white/60 animate-toast-bar" />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="sticky top-0 z-20 bg-black/80 backdrop-blur-xl border-b border-white/10">
+        <div className="max-w-4xl mx-auto px-5 py-4 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">
+              Pedidos
+              {newCount > 0 ? (
+                <span className="ml-2 inline-flex items-center text-xs px-2 py-0.5 rounded-full border border-white/10 bg-white/10">
+                  +{newCount}
+                </span>
+              ) : null}
+            </h1>
+            <p className="text-xs text-white/60">{restaurant ? restaurant.name : "Cargando..."}</p>
+            {restaurant?.slug ? (
+              <p className="text-xs text-white/50 mt-1">
+                Link público: <span className="font-mono">/r/{restaurant.slug}</span>
+              </p>
             ) : null}
           </div>
 
-          {/* ✅ BOTONES ADMIN (Menú + Ajustes + Salir) */}
           <div className="flex gap-2 items-center flex-wrap justify-end">
-            <Link
-              href="/admin/menu"
-              className="px-4 py-2 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm"
-            >
-              Menú
-            </Link>
+            <label className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/15 bg-white/5 text-sm select-none">
+              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+              Archivados
+            </label>
 
-            <Link
-              href="/admin/settings"
-              className="px-4 py-2 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm"
-            >
-              Ajustes
-            </Link>
+            {!soundEnabled ? (
+              <button
+                className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+                onClick={enableSound}
+                title="Activa sonido (requiere click por política del navegador)"
+              >
+                🔇 Activar sonido
+              </button>
+            ) : (
+              <button
+                className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+                onClick={disableSound}
+                title="Desactiva sonido"
+              >
+                🔊 Sonido ON
+              </button>
+            )}
 
             <button
-              className="px-4 py-2 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm"
+              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              onClick={() => router.push("/admin/settings")}
+              disabled={!restaurant}
+            >
+              Ajustes
+            </button>
+
+            <button
+              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
               onClick={logout}
             >
               Salir
@@ -416,57 +562,43 @@ export default function AdminOrders() {
           </div>
         </div>
 
-        {/* Toolbar: search + archivados */}
-        <div className="max-w-5xl mx-auto px-6 pb-4 space-y-3">
-          <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-between">
-            <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 flex items-center gap-3 w-full sm:max-w-2xl">
-              <div className="text-white/50 text-sm">🔎</div>
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Buscar por folio, nombre, teléfono o producto..."
-                className="w-full bg-transparent outline-none text-sm placeholder:text-white/35"
-              />
-              {search ? (
-                <button
-                  className="text-xs px-3 py-1 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition"
-                  onClick={() => setSearch("")}
-                >
-                  Limpiar
-                </button>
-              ) : null}
-            </div>
-
-            <label className="flex items-center gap-2 px-4 py-3 rounded-2xl border border-white/10 bg-white/5 text-sm select-none">
-              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
-              Archivados
-            </label>
-          </div>
-
-          {/* Status filters */}
-          <div className="flex gap-2 overflow-x-auto no-scrollbar">
-            {["all", ...STATUS_KEYS].map((k) => {
-              const active = filter === k;
-              return (
-                <button
-                  key={k}
-                  onClick={() => setFilter(k)}
-                  className={[
-                    "px-4 py-2 rounded-full border text-sm whitespace-nowrap transition",
-                    active ? "bg-white/10 border-white/15" : "bg-white/5 border-white/10 hover:bg-white/10",
-                  ].join(" ")}
-                  style={active ? { borderColor: `${accent}50`, backgroundColor: `${accent}14` } : undefined}
-                >
-                  {statusLabel(k)}
-                </button>
-              );
-            })}
+        <div className="max-w-4xl mx-auto px-5 pb-3">
+          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 flex items-center gap-3">
+            <div className="text-white/50 text-sm">🔎</div>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar por folio, nombre, teléfono o producto..."
+              className="w-full bg-transparent outline-none text-sm"
+            />
+            {search ? (
+              <button
+                className="text-xs px-3 py-1 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition"
+                onClick={() => setSearch("")}
+              >
+                Limpiar
+              </button>
+            ) : null}
           </div>
         </div>
-      </header>
 
-      {/* Body */}
-      <main className="relative max-w-5xl mx-auto px-6 py-6 space-y-4">
+        <div className="max-w-4xl mx-auto px-5 pb-4 flex gap-2 overflow-x-auto no-scrollbar">
+          {["all", ...STATUS_KEYS].map((k) => (
+            <button
+              key={k}
+              onClick={() => setFilter(k)}
+              className={[
+                "px-4 py-2 rounded-full border text-sm whitespace-nowrap transition",
+                filter === k ? "border-white/20 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
+              ].join(" ")}
+            >
+              {statusLabel(k)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-5 py-6 space-y-4">
         {loading ? (
           <div className="rounded-3xl border border-white/10 bg-white/5 p-5 text-white/70">Cargando pedidos...</div>
         ) : filtered.length === 0 ? (
@@ -487,9 +619,7 @@ export default function AdminOrders() {
                     <StatusPill status={o.status} />
                     {savingMap[o.id] ? <span className="text-xs text-white/60">Guardando...</span> : null}
                     {showArchived && o.archived_at ? (
-                      <span className="text-xs text-white/50">
-                        Archivado: {new Date(o.archived_at).toLocaleString()}
-                      </span>
+                      <span className="text-xs text-white/50">Archivado: {new Date(o.archived_at).toLocaleString()}</span>
                     ) : null}
                   </div>
 
@@ -500,19 +630,23 @@ export default function AdminOrders() {
                   <div className="text-sm text-white/70 mt-1">
                     {o.delivery_type === "delivery" ? "Entrega a domicilio" : "Recoger"} · {formatAddress(o)}
                   </div>
+
+                  {o.notes ? (
+                    <div className="text-sm text-white/70 mt-2">
+                      <span className="text-white/50">Notas: </span>
+                      <span className="text-white/80">{o.notes}</span>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="text-xs text-white/50 whitespace-nowrap">{new Date(o.created_at).toLocaleString()}</div>
               </div>
 
-              {/* Tracking buttons */}
               {hasToken ? (
                 <div className="mt-4 flex gap-2 flex-wrap">
                   <button
                     onClick={() => copyTracking(o)}
                     className="px-4 py-2 rounded-full border text-sm transition border-white/15 bg-white/10 hover:bg-white/15"
-                    title="Copiar link de seguimiento"
-                    style={{ borderColor: `${accent}35` }}
                   >
                     {copiedId === o.id ? "✅ Copiado" : "Copiar tracking"}
                   </button>
@@ -520,7 +654,6 @@ export default function AdminOrders() {
                   <button
                     onClick={() => openWhatsApp(o)}
                     className="px-4 py-2 rounded-full border text-sm transition border-emerald-500/25 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
-                    title="Enviar link por WhatsApp"
                   >
                     WhatsApp cliente
                   </button>
@@ -528,7 +661,6 @@ export default function AdminOrders() {
                   <button
                     onClick={() => openTracking(o)}
                     className="px-4 py-2 rounded-full border text-sm transition border-white/10 bg-white/5 hover:bg-white/10 text-white/80"
-                    title="Abrir seguimiento"
                   >
                     Abrir tracking
                   </button>
@@ -537,7 +669,6 @@ export default function AdminOrders() {
                 <div className="mt-4 text-xs text-white/50">Sin token de tracking.</div>
               )}
 
-              {/* Items */}
               <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4">
                 <div className="text-sm font-medium mb-2">Productos</div>
 
@@ -552,7 +683,9 @@ export default function AdminOrders() {
                             <b>{it.qty}×</b> {it.name_snapshot}
                           </div>
                           <div className="text-xs text-white/50 mt-1">{money(it.price_snapshot)} c/u</div>
+                          {it.notes ? <div className="text-xs text-white/60 mt-1">Nota: {it.notes}</div> : null}
                         </div>
+
                         <div className="text-sm font-semibold whitespace-nowrap">
                           {money(Number(it.price_snapshot) * Number(it.qty))}
                         </div>
@@ -579,7 +712,6 @@ export default function AdminOrders() {
                 )}
               </div>
 
-              {/* Acciones */}
               <div className="mt-4 flex gap-2 flex-wrap">
                 {!showArchived ? (
                   <>
@@ -632,7 +764,7 @@ export default function AdminOrders() {
             </div>
           );
         })}
-      </main>
+      </div>
 
       <style>{`
         @keyframes statusPop {
@@ -643,6 +775,19 @@ export default function AdminOrders() {
         .animate-status-pop { animation: statusPop 180ms ease-out; will-change: transform, opacity; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        @keyframes toastIn {
+          0% { transform: translateY(-8px) scale(0.98); opacity: 0; }
+          60% { transform: translateY(0px) scale(1.01); opacity: 1; }
+          100% { transform: translateY(0px) scale(1); opacity: 1; }
+        }
+        .animate-toast-in { animation: toastIn 220ms ease-out; will-change: transform, opacity; }
+
+        @keyframes toastBar {
+          from { transform: translateX(-100%); }
+          to { transform: translateX(0%); }
+        }
+        .animate-toast-bar { animation: toastBar 3.8s linear; transform-origin: left; }
       `}</style>
     </div>
   );

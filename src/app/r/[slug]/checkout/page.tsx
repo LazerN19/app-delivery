@@ -7,16 +7,60 @@ import { useCart } from "@/components/cart/CartProvider";
 import { supabase } from "@/lib/supabaseClient";
 import { getOpenStatus } from "@/lib/hours";
 
-type RestaurantLite = {
+type BrandMode = "auto" | "logo" | "icon" | "text" | "logo_text" | "icon_text";
+
+type Restaurant = {
   name: string;
   slug: string;
   delivery_fee: number;
   is_active: boolean;
   hours: any;
+
+  // branding
+  logo_url: string | null;
+  brand_icon: string | null;
+  brand_text: string | null;
+  brand_tagline: string | null;
+  accent_color: string | null;
+  brand_mode: string | null;
 };
 
 function money(n: number) {
   return `$${Number(n || 0).toFixed(2)}`;
+}
+
+function safeMode(m: string | null): BrandMode {
+  const v = (m || "auto") as BrandMode;
+  return ["auto", "logo", "icon", "text", "logo_text", "icon_text"].includes(v) ? v : "auto";
+}
+
+function deriveAccent(r: Restaurant | null) {
+  return r?.accent_color || "#ff3b30";
+}
+
+function getBrand(r: Restaurant) {
+  const mode = safeMode(r.brand_mode);
+  const logo = r.logo_url || null;
+  const icon = r.brand_icon || "🍽️";
+  const text = (r.brand_text || r.name || "Restaurante").trim();
+  const tagline = (r.brand_tagline || "Ordena directo • Sin comisiones").trim();
+
+  if (mode === "logo" && logo) return { kind: "logo" as const, logo, icon, text, tagline };
+  if (mode === "icon") return { kind: "icon" as const, logo, icon, text, tagline };
+  if (mode === "text") return { kind: "text" as const, logo, icon, text, tagline };
+  if (mode === "logo_text" && logo) return { kind: "logo_text" as const, logo, icon, text, tagline };
+  if (mode === "icon_text") return { kind: "icon_text" as const, logo, icon, text, tagline };
+
+  // auto
+  if (logo) return { kind: "logo_text" as const, logo, icon, text, tagline };
+  if (icon) return { kind: "icon_text" as const, logo, icon, text, tagline };
+  return { kind: "text" as const, logo, icon, text, tagline };
+}
+
+function statusPill(isOpen: boolean) {
+  return isOpen
+    ? { label: "Abierto", icon: "🟢", border: "rgba(34,197,94,0.30)", bg: "rgba(34,197,94,0.12)" }
+    : { label: "Cerrado", icon: "🔴", border: "rgba(239,68,68,0.30)", bg: "rgba(239,68,68,0.12)" };
 }
 
 export default function CheckoutPage() {
@@ -25,7 +69,7 @@ export default function CheckoutPage() {
   const router = useRouter();
   const cart = useCart();
 
-  const [restaurant, setRestaurant] = useState<RestaurantLite | null>(null);
+  const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [loadingRestaurant, setLoadingRestaurant] = useState(true);
 
   const [deliveryType, setDeliveryType] = useState<"delivery" | "pickup">("delivery");
@@ -46,7 +90,7 @@ export default function CheckoutPage() {
 
   const validRestaurant = !!slug && cart.restaurantSlug === slug;
 
-  // cargar restaurante
+  // cargar restaurante + branding
   useEffect(() => {
     if (!slug) return;
 
@@ -55,7 +99,9 @@ export default function CheckoutPage() {
 
       const { data, error } = await supabase
         .from("restaurants")
-        .select("name,slug,delivery_fee,is_active,hours")
+        .select(
+          "name,slug,delivery_fee,is_active,hours,logo_url,brand_icon,brand_text,brand_tagline,accent_color,brand_mode"
+        )
         .eq("slug", slug)
         .single();
 
@@ -66,24 +112,25 @@ export default function CheckoutPage() {
         return;
       }
 
-      setRestaurant(data as RestaurantLite);
+      setRestaurant(data as Restaurant);
     }
 
     loadRestaurant();
   }, [slug]);
 
-  const open = useMemo(
-    () => getOpenStatus(restaurant?.hours),
-    [restaurant?.hours]
-  );
-  
+  const accent = deriveAccent(restaurant);
 
+  const open = useMemo(() => getOpenStatus(restaurant?.hours), [restaurant?.hours]);
   const canOrder = !!restaurant?.is_active && open.isOpen;
+
+  const st = statusPill(Boolean(open?.isOpen));
+  const brand = useMemo(() => (restaurant ? getBrand(restaurant) : null), [restaurant]);
 
   const subtotal = useMemo(() => cart.subtotal, [cart.subtotal]);
   const deliveryFee = Number(restaurant?.delivery_fee || 0);
-  const total =
-    deliveryType === "delivery" ? subtotal + deliveryFee : subtotal;
+  const total = deliveryType === "delivery" ? subtotal + deliveryFee : subtotal;
+
+  const empty = cart.items.length === 0;
 
   async function placeOrder() {
     if (!slug) return;
@@ -100,10 +147,10 @@ export default function CheckoutPage() {
     setPlacing(true);
 
     const payloadItems = cart.items.map((i) => ({
-      menu_item_id: i.id,
-      qty: i.qty,
-      notes: "",
-    }));
+  menu_item_id: i.id,
+  qty: i.qty,
+  notes: (notes.trim() || null), // fallback por ahora
+}));
 
     const address =
       deliveryType === "delivery"
@@ -137,25 +184,92 @@ export default function CheckoutPage() {
 
     cart.clear();
 
-    // ✅ REDIRECCIÓN AUTOMÁTICA AL TRACKING
     if (res?.public_tracking_token) {
       router.push(`/t/${res.public_tracking_token}`);
       return;
     }
 
-    // fallback (no debería pasar)
     router.push(`/r/${slug}`);
+  }
+
+  function Field({
+    value,
+    onChange,
+    placeholder,
+    required,
+    type = "text",
+  }: {
+    value: string;
+    onChange: (v: string) => void;
+    placeholder: string;
+    required?: boolean;
+    type?: string;
+  }) {
+    return (
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={required ? `${placeholder} *` : placeholder}
+        className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none placeholder:text-white/35 focus:border-white/20"
+      />
+    );
   }
 
   return (
     <div className="min-h-screen bg-black text-white">
+      {/* Fondo (igual que menú) */}
+      <div
+        className="pointer-events-none fixed inset-0 opacity-60"
+        style={{
+          background:
+            `radial-gradient(1200px 600px at 20% 10%, ${accent}22 0%, transparent 60%),` +
+            `radial-gradient(900px 500px at 80% 20%, #ff950022 0%, transparent 55%),` +
+            `radial-gradient(700px 450px at 40% 90%, #ffcc0020 0%, transparent 55%)`,
+        }}
+      />
+
       {/* Header */}
-      <div className="sticky top-0 z-20 bg-black/80 backdrop-blur-xl border-b border-white/10">
-        <div className="max-w-xl mx-auto px-5 py-4 flex items-center justify-between">
-          <div>
-            <div className="text-lg font-semibold tracking-tight">Checkout</div>
-            <div className="text-xs text-white/60">
-              {loadingRestaurant ? "Cargando..." : restaurant?.name ?? "Restaurante"}
+      <header className="sticky top-0 z-20 border-b border-white/10 bg-black/70 backdrop-blur-xl">
+        <div className="mx-auto max-w-4xl px-5 py-4 flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              {brand && (brand.kind === "logo" || brand.kind === "logo_text") && brand.logo ? (
+                <div className="h-10 w-10 rounded-2xl border border-white/10 bg-white/5 overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={brand.logo} alt="logo" className="h-full w-full object-cover" />
+                </div>
+              ) : brand && (brand.kind === "icon" || brand.kind === "icon_text") ? (
+                <div
+                  className="h-10 w-10 rounded-2xl border border-white/10 bg-white/5 flex items-center justify-center text-xl shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
+                  style={{ borderColor: `${accent}45`, backgroundColor: `${accent}12` }}
+                >
+                  {brand.icon}
+                </div>
+              ) : null}
+
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="text-lg font-semibold tracking-tight">Checkout</div>
+
+                  {/* Estado abierto/cerrado */}
+                  <span
+                    className="inline-flex items-center gap-2 text-[11px] px-2.5 py-1 rounded-full border"
+                    style={{ borderColor: st.border, backgroundColor: st.bg }}
+                    title={open?.reason || ""}
+                  >
+                    <span className="text-[10px]">{st.icon}</span>
+                    <span className="font-medium">{st.label}</span>
+                  </span>
+                </div>
+
+                <div className="text-xs text-white/60 truncate">
+                  {loadingRestaurant ? "Cargando..." : brand ? brand.text : restaurant?.name ?? "Restaurante"}
+                  {open?.reason ? (
+                    <span className="text-white/45"> · {open.reason}</span>
+                  ) : null}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -166,187 +280,238 @@ export default function CheckoutPage() {
             Volver
           </Link>
         </div>
-      </div>
 
-      <div className="max-w-xl mx-auto px-5 py-6 space-y-4">
-        {/* Avisos */}
-        {slug && cart.restaurantSlug && cart.restaurantSlug !== slug && (
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-            <div className="font-medium">Tu carrito pertenece a otro restaurante.</div>
-            <div className="mt-3">
-              <button
-                className="px-4 py-2 rounded-full border border-white/15 bg-white/10 hover:bg-white/15 transition text-sm"
-                onClick={() => cart.clear()}
-              >
-                Vaciar carrito
-              </button>
+        {/* Banner de problemas */}
+        {slug && cart.restaurantSlug && cart.restaurantSlug !== slug ? (
+          <div className="px-5 pb-4">
+            <div className="mx-auto max-w-4xl rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="font-medium">Tu carrito pertenece a otro restaurante.</div>
+              <div className="mt-3">
+                <button
+                  className="px-4 py-2 rounded-full border border-white/15 bg-white/10 hover:bg-white/15 transition text-sm"
+                  onClick={() => cart.clear()}
+                >
+                  Vaciar carrito
+                </button>
+              </div>
             </div>
           </div>
-        )}
+        ) : null}
 
-        {restaurant && !canOrder && (
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-            <div className="font-medium">Restaurante cerrado</div>
-            <div className="text-sm text-white/70 mt-1">
-              {!restaurant.is_active ? "No disponible" : open.reason}
+        {restaurant && !canOrder ? (
+          <div className="px-5 pb-4">
+            <div className="mx-auto max-w-4xl rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="font-medium">
+                {restaurant.is_active ? "Restaurante cerrado" : "Restaurante no disponible"}
+              </div>
+              <div className="text-sm text-white/70 mt-1">{open.reason}</div>
             </div>
           </div>
-        )}
+        ) : null}
+      </header>
 
-        {/* Pedido */}
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold tracking-tight">Tu pedido</h2>
-            <div className="text-xs text-white/60">{cart.count} artículos</div>
-          </div>
+      {/* Content */}
+      <div className="relative mx-auto max-w-4xl px-5 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+          {/* Left: forms */}
+          <div className="lg:col-span-3 space-y-5">
+            {/* Pedido (mobile también) */}
+            <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-semibold tracking-tight">Tu pedido</h2>
+                <div className="text-xs text-white/60">{cart.count} artículos</div>
+              </div>
 
-          {cart.items.length === 0 ? (
-            <div className="text-sm text-white/70">Carrito vacío.</div>
-          ) : (
-            <div className="space-y-3">
-              {cart.items.map((i) => (
-                <div key={i.id} className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="font-medium">{i.name}</div>
-                    <div className="text-sm text-white/60">
-                      {money(i.price)} c/u
-                    </div>
-                  </div>
-                  <div className="text-sm font-semibold">
-                    {money(i.price * i.qty)}
-                  </div>
+              {empty ? (
+                <div className="text-sm text-white/70">
+                  Carrito vacío.{" "}
+                  <Link href={slug ? `/r/${slug}` : "/"} className="underline text-white/80">
+                    Volver al menú
+                  </Link>
                 </div>
-              ))}
+              ) : (
+                <div className="space-y-3">
+                  {cart.items.map((i) => (
+                    <div key={i.id} className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">{i.name}</div>
+                          <div className="text-xs text-white/60 mt-1">{money(i.price)} c/u</div>
+                        </div>
+                        <div className="text-sm font-semibold whitespace-nowrap">{money(i.price * i.qty)}</div>
+                      </div>
 
-              <div className="border-t border-white/10 pt-4 mt-4 space-y-1 text-sm">
-                <div className="flex justify-between text-white/70">
+                      <div className="mt-3 flex items-center justify-between">
+                        <div className="inline-flex items-center gap-2">
+                          <button
+                            onClick={() => cart.setQty(i.id, Math.max(1, i.qty - 1))}
+                            className="h-9 w-9 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition"
+                          >
+                            −
+                          </button>
+                          <div className="min-w-[34px] text-center text-sm font-medium">{i.qty}</div>
+                          <button
+                            onClick={() => cart.setQty(i.id, i.qty + 1)}
+                            className="h-9 w-9 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition"
+                          >
+                            +
+                          </button>
+                        </div>
+
+                        <button
+                          onClick={() => cart.removeItem(i.id)}
+                          className="text-xs px-3 py-2 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition"
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {/* Datos */}
+            <section className="rounded-3xl border border-white/10 bg-white/5 p-5 space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="font-semibold tracking-tight">Datos</h2>
+                <div className="text-xs text-white/50">Pago: efectivo</div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  className={[
+                    "rounded-2xl border px-4 py-3 text-sm transition",
+                    deliveryType === "delivery"
+                      ? "border-white/20 bg-white/10"
+                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                  ].join(" ")}
+                  onClick={() => setDeliveryType("delivery")}
+                  style={deliveryType === "delivery" ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` } : undefined}
+                >
+                  Entrega
+                </button>
+                <button
+                  type="button"
+                  className={[
+                    "rounded-2xl border px-4 py-3 text-sm transition",
+                    deliveryType === "pickup"
+                      ? "border-white/20 bg-white/10"
+                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                  ].join(" ")}
+                  onClick={() => setDeliveryType("pickup")}
+                  style={deliveryType === "pickup" ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` } : undefined}
+                >
+                  Recoger
+                </button>
+              </div>
+
+              <Field value={name} onChange={setName} placeholder="Tu nombre" required />
+              <Field value={phone} onChange={setPhone} placeholder="Teléfono" required type="tel" />
+
+              {deliveryType === "delivery" ? (
+                <>
+                  <Field value={street} onChange={setStreet} placeholder="Calle" required />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field value={number} onChange={setNumber} placeholder="Número" />
+                    <Field value={neighborhood} onChange={setNeighborhood} placeholder="Colonia" required />
+                  </div>
+
+                  <Field value={city} onChange={setCity} placeholder="Ciudad (opcional)" />
+
+                  <textarea
+                    className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm min-h-[84px] outline-none placeholder:text-white/35 focus:border-white/20"
+                    placeholder="Referencias (opcional)"
+                    value={references}
+                    onChange={(e) => setReferences(e.target.value)}
+                  />
+                </>
+              ) : null}
+
+              <textarea
+                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm min-h-[84px] outline-none placeholder:text-white/35 focus:border-white/20"
+                placeholder="Notas (opcional)"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+
+              <button
+                className="w-full rounded-2xl border px-4 py-4 text-sm font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={placeOrder}
+                disabled={placing || !restaurant || !validRestaurant || empty || !canOrder}
+                style={{ borderColor: `${accent}55`, backgroundColor: `${accent}18` }}
+              >
+                {placing ? "Enviando..." : "Confirmar pedido"}
+              </button>
+
+              {!validRestaurant ? (
+                <div className="text-xs text-white/45">
+                  Tu carrito es de otro restaurante. Vacíalo para continuar.
+                </div>
+              ) : null}
+            </section>
+          </div>
+
+          {/* Right: summary */}
+          <aside className="lg:col-span-2 space-y-5 lg:sticky lg:top-[92px] h-fit">
+            <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
+              <div className="flex items-center justify-between mb-3">
+                <div className="font-semibold">Resumen</div>
+                <div className="text-xs text-white/55">{cart.count} artículos</div>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-black/30 p-4 space-y-2">
+                <div className="flex justify-between text-sm text-white/75">
                   <span>Subtotal</span>
                   <span>{money(subtotal)}</span>
                 </div>
-                <div className="flex justify-between text-white/70">
+
+                <div className="flex justify-between text-sm text-white/75">
                   <span>Envío</span>
-                  <span>
-                    {deliveryType === "delivery"
-                      ? money(deliveryFee)
-                      : money(0)}
-                  </span>
+                  <span>{deliveryType === "delivery" ? money(deliveryFee) : money(0)}</span>
                 </div>
-                <div className="flex justify-between font-semibold">
+
+                <div className="h-px w-full bg-white/10 my-2" />
+
+                <div className="flex justify-between text-base font-semibold">
                   <span>Total</span>
                   <span>{money(total)}</span>
                 </div>
               </div>
-            </div>
-          )}
-        </section>
 
-        {/* Datos */}
-        <section className="rounded-3xl border border-white/10 bg-white/5 p-5 space-y-4">
-          <div className="flex justify-between">
-            <h2 className="font-semibold tracking-tight">Datos</h2>
-            <div className="text-xs text-white/50">Pago: efectivo</div>
-          </div>
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={() => cart.clear()}
+                  className="flex-1 px-4 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm"
+                  disabled={empty}
+                >
+                  Vaciar
+                </button>
 
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              className={`rounded-2xl border px-4 py-3 text-sm transition ${
-                deliveryType === "delivery"
-                  ? "border-white/20 bg-white/10"
-                  : "border-white/10 bg-white/5"
-              }`}
-              onClick={() => setDeliveryType("delivery")}
-            >
-              Entrega
-            </button>
-            <button
-              type="button"
-              className={`rounded-2xl border px-4 py-3 text-sm transition ${
-                deliveryType === "pickup"
-                  ? "border-white/20 bg-white/10"
-                  : "border-white/10 bg-white/5"
-              }`}
-              onClick={() => setDeliveryType("pickup")}
-            >
-              Recoger
-            </button>
-          </div>
-
-          <input
-            className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm"
-            placeholder="Tu nombre *"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-
-          <input
-            className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm"
-            placeholder="Teléfono *"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-          />
-
-          {deliveryType === "delivery" && (
-            <>
-              <input
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm"
-                placeholder="Calle *"
-                value={street}
-                onChange={(e) => setStreet(e.target.value)}
-              />
-
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm"
-                  placeholder="Número"
-                  value={number}
-                  onChange={(e) => setNumber(e.target.value)}
-                />
-                <input
-                  className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm"
-                  placeholder="Colonia *"
-                  value={neighborhood}
-                  onChange={(e) => setNeighborhood(e.target.value)}
-                />
+                <Link
+                  href={slug ? `/r/${slug}` : "/"}
+                  className="flex-1 px-4 py-3 rounded-2xl border text-sm font-semibold text-center transition"
+                  style={{ borderColor: `${accent}55`, backgroundColor: `${accent}18` }}
+                >
+                  Menú
+                </Link>
               </div>
 
-              <input
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm"
-                placeholder="Ciudad (opcional)"
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-              />
+              <div className="mt-4 text-xs text-white/45">
+                Tip: pide un teléfono válido para contactar al cliente rápido.
+              </div>
+            </section>
 
-              <textarea
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm min-h-[80px]"
-                placeholder="Referencias (opcional)"
-                value={references}
-                onChange={(e) => setReferences(e.target.value)}
-              />
-            </>
-          )}
-
-          <textarea
-            className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm min-h-[80px]"
-            placeholder="Notas (opcional)"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-          />
-
-          <button
-            className="w-full rounded-2xl border border-white/15 bg-white/10 hover:bg-white/15 transition px-4 py-4 text-sm font-medium disabled:opacity-50"
-            onClick={placeOrder}
-            disabled={
-              placing ||
-              !restaurant ||
-              !validRestaurant ||
-              cart.items.length === 0 ||
-              !canOrder
-            }
-          >
-            {placing ? "Enviando..." : "Confirmar pedido"}
-          </button>
-        </section>
+            <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
+              <div className="text-sm font-semibold">Seguridad</div>
+              <div className="text-xs text-white/60 mt-2">
+                Este pedido se guarda directamente en el sistema del restaurante. El pago es en efectivo (por ahora).
+              </div>
+            </section>
+          </aside>
+        </div>
       </div>
     </div>
   );

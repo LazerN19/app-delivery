@@ -421,32 +421,48 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
         </div>
 
         {/* Tabs */}
-        <div className="px-5 pb-4">
-          <div className="mx-auto max-w-5xl flex gap-2 overflow-x-auto no-scrollbar">
-            {tabs.map((c) => {
-              const active = c.id === activeCat;
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => setActiveCat(c.id)}
-                  className={[
-                    "relative px-4 py-2 rounded-full border text-sm whitespace-nowrap transition",
-                    active ? "bg-white/10 border-white/15" : "bg-white/5 border-white/10 hover:bg-white/10",
-                  ].join(" ")}
-                  style={active ? { borderColor: `${accent}50`, backgroundColor: `${accent}14` } : undefined}
-                >
-                  {c.name}
-                  {active ? (
-                    <span
-                      className="absolute -bottom-[6px] left-1/2 -translate-x-1/2 h-[3px] w-10 rounded-full"
-                      style={{ backgroundColor: accent }}
-                    />
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        {/* Tabs */}
+<div className="px-5 pb-4">
+  <div
+    className={[
+      "mx-auto max-w-5xl flex gap-2 overflow-x-auto no-scrollbar",
+      "select-none",
+      "snap-x snap-mandatory",
+      "overscroll-x-contain overscroll-y-none",
+      "touch-pan-x",
+    ].join(" ")}
+    style={{
+      WebkitOverflowScrolling: "touch",
+      touchAction: "pan-x", // 🔥 clave: solo gesto horizontal
+    }}
+  >
+    {tabs.map((c) => {
+      const active = c.id === activeCat;
+
+      return (
+        <button
+          key={c.id}
+          onClick={() => setActiveCat(c.id)}
+          className={[
+            "relative px-4 py-2 rounded-full border text-sm whitespace-nowrap transition",
+            "snap-start",
+            active ? "bg-white/10 border-white/15" : "bg-white/5 border-white/10 hover:bg-white/10",
+          ].join(" ")}
+          style={active ? { borderColor: `${accent}50`, backgroundColor: `${accent}14` } : undefined}
+        >
+          {c.name}
+          {active ? (
+            <span
+              className="absolute -bottom-[6px] left-1/2 -translate-x-1/2 h-[3px] w-10 rounded-full"
+              style={{ backgroundColor: accent }}
+            />
+          ) : null}
+        </button>
+      );
+    })}
+  </div>
+</div>
+
       </header>
 
       {/* Aviso si el carrito es de otro restaurante */}
