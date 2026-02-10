@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import { useOrderSound } from "@/components/admin/useOrderSound";
 
 type Restaurant = { id: string; name: string; slug: string };
 
@@ -30,8 +31,6 @@ type Order = {
   archived_at: string | null;
 
   public_tracking_token: string | null;
-
-  // Si existe en tu tabla orders:
   notes?: string | null;
 
   order_items: OrderItem[];
@@ -89,16 +88,15 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
-const LS_SOUND = "orders_sound_enabled_v1";
+type Toast = { id: string; title: string; body?: string };
 
-type Toast = {
-  id: string;
-  title: string;
-  message?: string;
-};
+function uid() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
 
 export default function AdminOrders() {
   const router = useRouter();
+  const sound = useOrderSound();
 
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -111,93 +109,14 @@ export default function AdminOrders() {
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // ✅ Contador de “nuevos”
-  const [newCount, setNewCount] = useState(0);
-
-  // ✅ Sonido persistente
-  const [soundEnabled, setSoundEnabled] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  // ✅ Toasts
+  // ✅ Toasts internos
   const [toasts, setToasts] = useState<Toast[]>([]);
-
-  function pushToast(t: Omit<Toast, "id">) {
-    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const toast: Toast = { id, ...t };
-    setToasts((prev) => [toast, ...prev].slice(0, 3));
+  function pushToast(title: string, body?: string) {
+    const id = uid();
+    setToasts((prev) => [{ id, title, body }, ...prev].slice(0, 3));
     window.setTimeout(() => {
-      setToasts((prev) => prev.filter((x) => x.id !== id));
-    }, 3800);
-  }
-
-  function dismissToast(id: string) {
-    setToasts((prev) => prev.filter((x) => x.id !== id));
-  }
-
-  // ✅ init
-  useEffect(() => {
-    try {
-      const s = localStorage.getItem(LS_SOUND);
-      setSoundEnabled(s === "1");
-    } catch {}
-
-    audioRef.current = new Audio("/sounds/new-order.mp3");
-    audioRef.current.preload = "auto";
-    audioRef.current.volume = 0.7;
-
-    const onFocus = () => setNewCount(0);
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, []);
-
-  // ✅ Activar sonido: desbloquea autoplay con click
-  async function enableSound() {
-    try {
-      if (!audioRef.current) audioRef.current = new Audio("/sounds/new-order.mp3");
-      audioRef.current.currentTime = 0;
-
-      // intento de play para “desbloquear”
-      await audioRef.current.play();
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-
-      setSoundEnabled(true);
-      try {
-        localStorage.setItem(LS_SOUND, "1");
-      } catch {}
-    } catch (e) {
-      alert("El navegador bloqueó el audio. Haz click dentro de la página y vuelve a intentar.");
-      console.error(e);
-    }
-  }
-
-  function disableSound() {
-    setSoundEnabled(false);
-    try {
-      localStorage.setItem(LS_SOUND, "0");
-    } catch {}
-  }
-
-  function playNewOrderSound() {
-    if (!soundEnabled) return;
-    try {
-      if (!audioRef.current) audioRef.current = new Audio("/sounds/new-order.mp3");
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(() => {});
-    } catch {}
-  }
-
-  function notifyNewOrder() {
-    setNewCount((c) => c + 1);
-
-    // ✅ Toast iOS
-    pushToast({
-      title: "Nuevo pedido",
-      message: "Entró un pedido nuevo. Revisa la lista.",
-    });
-
-    // ✅ Solo tu mp3 (sin sonido del sistema)
-    playNewOrderSound();
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
   }
 
   function getTrackingUrl(token: string) {
@@ -291,46 +210,91 @@ export default function AdminOrders() {
     setLoading(false);
   }
 
-  // ✅ carga inicial
   useEffect(() => {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ al cambiar archivados
   useEffect(() => {
     if (!restaurant) return;
     loadAll(restaurant);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showArchived]);
 
-  // ✅ REALTIME (INSERT) → toast + sonido + refresh
+  // ✅ refs para NO re-suscribirte al canal por cambios de sound.enabled
+  const soundEnabledRef = useRef(false);
+  const soundReadyRef = useRef(false);
+
+  useEffect(() => {
+    soundEnabledRef.current = !!sound.enabled;
+  }, [sound.enabled]);
+
+  useEffect(() => {
+    soundReadyRef.current = !!sound.ready;
+  }, [sound.ready]);
+
+  // ✅ Realtime SOLO INSERT (evita duplicados por UPDATE)
+  const seenRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     if (!restaurant?.id) return;
 
+    // reset de anti-doble por restaurant
+    seenRef.current = new Set();
+
     const channel = supabase
-      .channel(`orders-realtime-${restaurant.id}`)
+      .channel(`orders-inserts-${restaurant.id}`)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "orders", filter: `restaurant_id=eq.${restaurant.id}` },
-        async (payload) => {
-          console.log("🟢 INSERT order realtime:", payload);
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "orders",
+          filter: `restaurant_id=eq.${restaurant.id}`,
+        },
+        async (payload: any) => {
+          const newOrder = payload?.new as { id?: string; folio?: number; customer_name?: string } | undefined;
+          const oid = newOrder?.id;
+          if (!oid) return;
 
-          // si estás viendo archivados, no molestamos
-          if (!showArchived) notifyNewOrder();
+          // anti-doble (por reconexión o eventos repetidos)
+          if (seenRef.current.has(oid)) return;
+          seenRef.current.add(oid);
 
+          // refresca lista
           await loadAll(restaurant);
+
+          // toast
+          pushToast(
+            "🛎️ Nuevo pedido",
+            `Folio #${newOrder?.folio ?? "?"} · ${newOrder?.customer_name ?? "Cliente"}`
+          );
+
+          // 🔊 Sonido: SOLO si el usuario ya lo activó
+          // y (idealmente) ya fue "unlock" con un click
+          if (soundEnabledRef.current) {
+            // Si aún no está listo, no molestamos con alerts
+            if (!soundReadyRef.current) {
+              pushToast("🔔 Sonido activo", "Cargando audio…");
+              return;
+            }
+            // play() puede fallar si no hubo gesto de usuario; tu hook debe manejarlo sin alert
+            try {
+              await sound.play();
+            } catch {
+              // No alert (molesta). Solo toast.
+              pushToast("🔇 Sonido bloqueado", "Da click en “🔔 Sonido ON” para habilitar audio.");
+            }
+          }
         }
       )
-      .subscribe((status) => {
-        console.log("🔌 Realtime status:", status);
-      });
+      .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restaurant?.id, showArchived, soundEnabled]);
+  }, [restaurant?.id]);
 
   async function setStatus(orderId: string, status: (typeof STATUS_KEYS)[number]) {
     if (!restaurant?.id) return;
@@ -412,6 +376,7 @@ export default function AdminOrders() {
 
   const filtered = useMemo(() => {
     let base = filter === "all" ? orders : orders.filter((o) => o.status === filter);
+
     const q = normalize(search);
     if (!q) return base;
 
@@ -441,21 +406,28 @@ export default function AdminOrders() {
     if (!o.public_tracking_token) return;
 
     const url = getTrackingUrl(o.public_tracking_token);
+
     const itemsText =
-      (o.order_items ?? []).map((it) => `• ${it.qty}× ${it.name_snapshot}`).join("\n") || "• (sin productos)";
+      (o.order_items ?? [])
+        .map((it) => `• ${it.qty}× ${it.name_snapshot}`)
+        .join("\n") || "• (sin productos)";
 
     const tipo = o.delivery_type === "delivery" ? "Entrega a domicilio" : "Recoger en sucursal";
-    const estado = o.status in STATUS_LABEL ? STATUS_LABEL[o.status as keyof typeof STATUS_LABEL] : o.status;
+    const estado =
+      o.status in STATUS_LABEL ? STATUS_LABEL[o.status as keyof typeof STATUS_LABEL] : o.status;
 
     const msg =
-      `Hola! ${o.customer_name || ""}\n` +
+      `Hola! ${o.customer_name || ""} \n` +
       `Tu pedido #${o.folio} está: *${estado}*\n\n` +
-      `*Resumen*\n${tipo}\n\n` +
-      `*Productos*\n${itemsText}\n\n` +
+      `*Resumen*\n` +
+      `${tipo}\n\n` +
+      `*Productos*\n` +
+      `${itemsText}\n\n` +
       `*Total:* ${money(o.total)}\n\n` +
       `Seguimiento:\n${url}`;
 
-    window.open(waLink(o.customer_phone, msg), "_blank", "noopener,noreferrer");
+    const link = waLink(o.customer_phone, msg);
+    window.open(link, "_blank", "noopener,noreferrer");
   }
 
   function openTracking(o: Order) {
@@ -465,39 +437,15 @@ export default function AdminOrders() {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      {/* ✅ TOASTS */}
-      <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-3 w-[min(360px,calc(100vw-2rem))]">
+      {/* ✅ Toasts */}
+      <div className="fixed top-4 right-4 z-[9999] space-y-2">
         {toasts.map((t) => (
           <div
             key={t.id}
-            className={[
-              "rounded-3xl border border-white/12 bg-black/70 backdrop-blur-xl",
-              "shadow-[0_18px_60px_rgba(0,0,0,0.55)]",
-              "px-4 py-3",
-              "animate-toast-in",
-            ].join(" ")}
+            className="w-[320px] rounded-2xl border border-white/10 bg-black/80 backdrop-blur-xl p-4 shadow-[0_24px_70px_rgba(0,0,0,0.55)]"
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm">🛎️</span>
-                  <div className="text-sm font-semibold truncate">{t.title}</div>
-                </div>
-                {t.message ? <div className="text-xs text-white/65 mt-1">{t.message}</div> : null}
-              </div>
-
-              <button
-                onClick={() => dismissToast(t.id)}
-                className="shrink-0 px-2 py-1 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition text-xs"
-                title="Cerrar"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="mt-3 h-[2px] w-full rounded-full overflow-hidden bg-white/10">
-              <div className="h-full w-full bg-white/60 animate-toast-bar" />
-            </div>
+            <div className="font-semibold">{t.title}</div>
+            {t.body ? <div className="text-sm text-white/70 mt-1">{t.body}</div> : null}
           </div>
         ))}
       </div>
@@ -505,15 +453,9 @@ export default function AdminOrders() {
       <div className="sticky top-0 z-20 bg-black/80 backdrop-blur-xl border-b border-white/10">
         <div className="max-w-4xl mx-auto px-5 py-4 flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">
-              Pedidos
-              {newCount > 0 ? (
-                <span className="ml-2 inline-flex items-center text-xs px-2 py-0.5 rounded-full border border-white/10 bg-white/10">
-                  +{newCount}
-                </span>
-              ) : null}
-            </h1>
+            <h1 className="text-xl font-semibold tracking-tight">Pedidos</h1>
             <p className="text-xs text-white/60">{restaurant ? restaurant.name : "Cargando..."}</p>
+
             {restaurant?.slug ? (
               <p className="text-xs text-white/50 mt-1">
                 Link público: <span className="font-mono">/r/{restaurant.slug}</span>
@@ -527,23 +469,28 @@ export default function AdminOrders() {
               Archivados
             </label>
 
-            {!soundEnabled ? (
-              <button
-                className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
-                onClick={enableSound}
-                title="Activa sonido (requiere click por política del navegador)"
-              >
-                🔇 Activar sonido
-              </button>
-            ) : (
-              <button
-                className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
-                onClick={disableSound}
-                title="Desactiva sonido"
-              >
-                🔊 Sonido ON
-              </button>
-            )}
+            {/* ✅ Botón sonido (sin alert molesto) */}
+            <button
+  className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+  onClick={async () => {
+    if (!sound.enabled) {
+      const ok = await sound.unlock();
+      if (!ok) {
+        pushToast("🔇 Sonido bloqueado", "Da un click en cualquier parte de la página y vuelve a intentar.");
+        return;
+      }
+      sound.setEnabled(true);
+      pushToast("🔔 Sonido activado", "Listo para nuevos pedidos.");
+    } else {
+      sound.setEnabled(false);
+      pushToast("🔕 Sonido desactivado");
+    }
+  }}
+  title="Activa el sonido (requiere un click para desbloquear)"
+>
+  {sound.enabled ? "🔔 Sonido ON" : "🔕 Activar sonido"}
+</button>
+
 
             <button
               className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
@@ -562,6 +509,7 @@ export default function AdminOrders() {
           </div>
         </div>
 
+        {/* Search */}
         <div className="max-w-4xl mx-auto px-5 pb-3">
           <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 flex items-center gap-3">
             <div className="text-white/50 text-sm">🔎</div>
@@ -582,6 +530,7 @@ export default function AdminOrders() {
           </div>
         </div>
 
+        {/* Status filters */}
         <div className="max-w-4xl mx-auto px-5 pb-4 flex gap-2 overflow-x-auto no-scrollbar">
           {["all", ...STATUS_KEYS].map((k) => (
             <button
@@ -633,8 +582,7 @@ export default function AdminOrders() {
 
                   {o.notes ? (
                     <div className="text-sm text-white/70 mt-2">
-                      <span className="text-white/50">Notas: </span>
-                      <span className="text-white/80">{o.notes}</span>
+                      <span className="text-white/50">Notas:</span> {o.notes}
                     </div>
                   ) : null}
                 </div>
@@ -647,6 +595,7 @@ export default function AdminOrders() {
                   <button
                     onClick={() => copyTracking(o)}
                     className="px-4 py-2 rounded-full border text-sm transition border-white/15 bg-white/10 hover:bg-white/15"
+                    title="Copiar link de seguimiento"
                   >
                     {copiedId === o.id ? "✅ Copiado" : "Copiar tracking"}
                   </button>
@@ -654,6 +603,7 @@ export default function AdminOrders() {
                   <button
                     onClick={() => openWhatsApp(o)}
                     className="px-4 py-2 rounded-full border text-sm transition border-emerald-500/25 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
+                    title="Enviar link por WhatsApp"
                   >
                     WhatsApp cliente
                   </button>
@@ -661,6 +611,7 @@ export default function AdminOrders() {
                   <button
                     onClick={() => openTracking(o)}
                     className="px-4 py-2 rounded-full border text-sm transition border-white/10 bg-white/5 hover:bg-white/10 text-white/80"
+                    title="Abrir seguimiento en una nueva pestaña"
                   >
                     Abrir tracking
                   </button>
@@ -683,9 +634,13 @@ export default function AdminOrders() {
                             <b>{it.qty}×</b> {it.name_snapshot}
                           </div>
                           <div className="text-xs text-white/50 mt-1">{money(it.price_snapshot)} c/u</div>
-                          {it.notes ? <div className="text-xs text-white/60 mt-1">Nota: {it.notes}</div> : null}
-                        </div>
 
+                          {it.notes ? (
+                            <div className="text-xs text-white/60 mt-1">
+                              <span className="text-white/40">Nota:</span> {it.notes}
+                            </div>
+                          ) : null}
+                        </div>
                         <div className="text-sm font-semibold whitespace-nowrap">
                           {money(Number(it.price_snapshot) * Number(it.qty))}
                         </div>
@@ -775,19 +730,6 @@ export default function AdminOrders() {
         .animate-status-pop { animation: statusPop 180ms ease-out; will-change: transform, opacity; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-
-        @keyframes toastIn {
-          0% { transform: translateY(-8px) scale(0.98); opacity: 0; }
-          60% { transform: translateY(0px) scale(1.01); opacity: 1; }
-          100% { transform: translateY(0px) scale(1); opacity: 1; }
-        }
-        .animate-toast-in { animation: toastIn 220ms ease-out; will-change: transform, opacity; }
-
-        @keyframes toastBar {
-          from { transform: translateX(-100%); }
-          to { transform: translateX(0%); }
-        }
-        .animate-toast-bar { animation: toastBar 3.8s linear; transform-origin: left; }
       `}</style>
     </div>
   );

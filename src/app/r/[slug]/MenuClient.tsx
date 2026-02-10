@@ -276,7 +276,8 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
   }
 
   return (
-    <div className="min-h-screen bg-black text-white">
+  <div className="min-h-screen bg-black text-white overflow-x-hidden" style={{ overflowX: "clip" as any }}>
+
       {/* Fondo */}
       <div
         className="pointer-events-none fixed inset-0 opacity-60"
