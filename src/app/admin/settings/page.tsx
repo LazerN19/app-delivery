@@ -12,6 +12,10 @@ type Restaurant = {
   name: string;
   slug: string;
 
+  // ✅ envío
+  delivery_fee: number | null;
+
+  // branding
   logo_url: string | null;
   brand_icon: string | null;
   brand_text: string | null;
@@ -80,7 +84,7 @@ function normalizeHoursToDays(hours: any | null): { base: any; days: Record<DayK
     thu: makeDefaultDay(),
     fri: makeDefaultDay(),
     sat: makeDefaultDay(),
-    sun: { closed: true, open: "09:00", close: "21:00" }, // típico domingo cerrado, cámbialo
+    sun: { closed: true, open: "09:00", close: "21:00" },
   };
 
   if (!hours) {
@@ -125,6 +129,11 @@ function isValidHHMM(v: string) {
   return /^([01]\d|2[0-3]):([0-5]\d)$/.test(v);
 }
 
+type Toast = { id: string; title: string; body?: string };
+function uid() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
 export default function AdminSettings() {
   const router = useRouter();
 
@@ -134,6 +143,16 @@ export default function AdminSettings() {
 
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
 
+  // ✅ Toasts internos (sin popups del navegador)
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  function pushToast(title: string, body?: string) {
+    const id = uid();
+    setToasts((prev) => [{ id, title, body }, ...prev].slice(0, 3));
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
+  }
+
   // Branding form fields
   const [brandMode, setBrandMode] = useState<BrandMode>("auto");
   const [logoUrl, setLogoUrl] = useState("");
@@ -142,8 +161,11 @@ export default function AdminSettings() {
   const [brandTagline, setBrandTagline] = useState("Ordena directo • Sin comisiones");
   const [accentColor, setAccentColor] = useState("#ff3b30");
 
+  // ✅ envío
+  const [deliveryFee, setDeliveryFee] = useState<string>("0");
+
   // Hours (UI)
-  const [hoursBase, setHoursBase] = useState<any | null>(null); // mantiene forma original si existía
+  const [hoursBase, setHoursBase] = useState<any | null>(null);
   const [days, setDays] = useState<Record<DayKey, DayHours> | null>(null);
 
   // Advanced
@@ -163,7 +185,7 @@ export default function AdminSettings() {
       const { data: r, error } = await supabase
         .from("restaurants")
         .select(
-          "id,owner_id,name,slug,logo_url,brand_icon,brand_text,brand_tagline,accent_color,brand_mode,hours"
+          "id,owner_id,name,slug,delivery_fee,logo_url,brand_icon,brand_text,brand_tagline,accent_color,brand_mode,hours"
         )
         .eq("owner_id", auth.user.id)
         .single();
@@ -183,6 +205,8 @@ export default function AdminSettings() {
       setBrandTagline(rr.brand_tagline || "Ordena directo • Sin comisiones");
       setAccentColor(rr.accent_color || "#ff3b30");
 
+      setDeliveryFee(String(Number(rr.delivery_fee ?? 0)));
+
       const norm = normalizeHoursToDays(rr.hours ?? null);
       setHoursBase(norm.base);
       setDays(norm.days);
@@ -196,18 +220,15 @@ export default function AdminSettings() {
   const previewRestaurant = useMemo(() => {
     if (!restaurant) return null;
 
-    // Construimos hours final dependiendo si está advanced o no
     let finalHours: any = hoursBase;
 
     if (advancedHours) {
       try {
         finalHours = JSON.parse(hoursJson || "null");
       } catch {
-        // no rompas preview; conserva hoursBase
         finalHours = hoursBase;
       }
     } else if (days) {
-      // si hoursBase ya tenía days, actualizamos eso; si no, lo guardamos como {days}
       finalHours = hoursBase?.days ? { ...hoursBase, days } : { ...(hoursBase || {}), days };
     }
 
@@ -220,6 +241,7 @@ export default function AdminSettings() {
       brand_tagline: brandTagline || null,
       accent_color: accentColor || null,
       hours: finalHours ?? null,
+      delivery_fee: Number(deliveryFee || 0),
     } as Restaurant;
   }, [
     restaurant,
@@ -233,6 +255,7 @@ export default function AdminSettings() {
     days,
     advancedHours,
     hoursJson,
+    deliveryFee,
   ]);
 
   const preview = useMemo(() => {
@@ -240,10 +263,18 @@ export default function AdminSettings() {
     return getBrand(previewRestaurant);
   }, [previewRestaurant]);
 
+  function updateDay(k: DayKey, patch: Partial<DayHours>) {
+    setDays((prev) => {
+      if (!prev) return prev;
+      return { ...prev, [k]: { ...prev[k], ...patch } };
+    });
+  }
+
   async function save() {
     if (!restaurant) return;
 
     setSaving(true);
+
     const { data: auth } = await supabase.auth.getUser();
     const user = auth.user;
     if (!user) {
@@ -259,7 +290,7 @@ export default function AdminSettings() {
         finalHours = JSON.parse(hoursJson || "null");
       } catch {
         setSaving(false);
-        alert("El JSON de horario no es válido.");
+        pushToast("⚠️ JSON inválido", "Revisa el horario en modo avanzado (JSON).");
         return;
       }
     } else if (days) {
@@ -273,7 +304,8 @@ export default function AdminSettings() {
       brand_text: (brandText || "").trim() || null,
       brand_tagline: (brandTagline || "").trim() || null,
       accent_color: (accentColor || "").trim() || null,
-      hours: finalHours ?? null, // ✅ GUARDAMOS HORARIO
+      hours: finalHours ?? null,
+      delivery_fee: Number(deliveryFee || 0), // ✅ GUARDAMOS ENVÍO
     };
 
     const { error } = await supabase
@@ -285,11 +317,11 @@ export default function AdminSettings() {
     setSaving(false);
 
     if (error) {
-      alert(error.message);
+      pushToast("❌ No se pudo guardar", error.message);
       return;
     }
 
-    alert("✅ Guardado");
+    pushToast("✅ Guardado", "Cambios aplicados correctamente.");
   }
 
   async function uploadLogo(file: File) {
@@ -308,21 +340,15 @@ export default function AdminSettings() {
 
     if (upErr) {
       setUploading(false);
-      alert(upErr.message);
+      pushToast("❌ Error al subir logo", upErr.message);
       return;
     }
 
     const { data } = supabase.storage.from("restaurant-assets").getPublicUrl(path);
     setLogoUrl(data.publicUrl);
-    setUploading(false);
-  }
 
-  function updateDay(k: DayKey, patch: Partial<DayHours>) {
-    setDays((prev) => {
-      if (!prev) return prev;
-      const next = { ...prev, [k]: { ...prev[k], ...patch } };
-      return next;
-    });
+    setUploading(false);
+    pushToast("✅ Logo actualizado", "Se subió correctamente.");
   }
 
   if (loading) {
@@ -341,6 +367,19 @@ export default function AdminSettings() {
 
   return (
     <div className="min-h-screen bg-black text-white">
+      {/* ✅ Toasts internos */}
+      <div className="fixed top-4 right-4 z-[9999] space-y-2">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className="w-[320px] rounded-2xl border border-white/10 bg-black/80 backdrop-blur-xl p-4 shadow-[0_24px_70px_rgba(0,0,0,0.55)]"
+          >
+            <div className="font-semibold">{t.title}</div>
+            {t.body ? <div className="text-sm text-white/70 mt-1">{t.body}</div> : null}
+          </div>
+        ))}
+      </div>
+
       <div
         className="pointer-events-none fixed inset-0 opacity-60"
         style={{
@@ -488,14 +527,41 @@ export default function AdminSettings() {
           </div>
         </section>
 
+        {/* ✅ ENVÍO */}
+        <section className="rounded-3xl border border-white/10 bg-white/5 p-6 space-y-3">
+          <div>
+            <div className="text-sm font-semibold">Envío</div>
+            <div className="text-[11px] text-white/45">Este monto se suma al total cuando el cliente elige “Entrega”.</div>
+          </div>
+
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-white/60">Precio de envío</label>
+              <input
+                value={deliveryFee}
+                onChange={(e) => setDeliveryFee(e.target.value.replace(/[^\d.]/g, ""))}
+                inputMode="decimal"
+                className="mt-1 w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
+                placeholder="30"
+              />
+              <div className="text-[11px] text-white/45 mt-2">Ejemplo: 30 (MXN)</div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+              <div className="text-xs text-white/60">Vista rápida</div>
+              <div className="mt-2 text-sm">
+                Envío: <span className="font-semibold">${Number(deliveryFee || 0).toFixed(2)}</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* ✅ HORARIO */}
         <section className="rounded-3xl border border-white/10 bg-white/5 p-6 space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">Horario</div>
-              <div className="text-[11px] text-white/45">
-                Esto controla si el restaurante está abierto para recibir pedidos.
-              </div>
+              <div className="text-[11px] text-white/45">Esto controla si el restaurante está abierto para recibir pedidos.</div>
             </div>
 
             <button
@@ -543,9 +609,7 @@ export default function AdminSettings() {
                           className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm outline-none disabled:opacity-50"
                           placeholder="09:00"
                         />
-                        {invalidOpen ? (
-                          <div className="text-[11px] text-red-300 mt-1">Formato inválido (HH:MM)</div>
-                        ) : null}
+                        {invalidOpen ? <div className="text-[11px] text-red-300 mt-1">Formato inválido (HH:MM)</div> : null}
                       </div>
 
                       <div>
@@ -557,9 +621,7 @@ export default function AdminSettings() {
                           className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm outline-none disabled:opacity-50"
                           placeholder="21:00"
                         />
-                        {invalidClose ? (
-                          <div className="text-[11px] text-red-300 mt-1">Formato inválido (HH:MM)</div>
-                        ) : null}
+                        {invalidClose ? <div className="text-[11px] text-red-300 mt-1">Formato inválido (HH:MM)</div> : null}
                       </div>
                     </div>
                   </div>
@@ -580,9 +642,7 @@ export default function AdminSettings() {
                 onChange={(e) => setHoursJson(e.target.value)}
                 className="w-full min-h-[220px] rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-xs font-mono outline-none"
               />
-              <div className="text-[11px] text-white/45">
-                Si esto se rompe por JSON inválido, te avisa al guardar.
-              </div>
+              <div className="text-[11px] text-white/45">Si esto se rompe por JSON inválido, te avisa al guardar.</div>
             </div>
           )}
         </section>
@@ -635,9 +695,7 @@ export default function AdminSettings() {
           )}
         </section>
 
-        <div className="text-center text-xs text-white/40">
-          Tip: con logo + color acento + horario, tu menú se comporta como app real.
-        </div>
+        <div className="text-center text-xs text-white/40">SiteApp.mx</div>
       </main>
     </div>
   );

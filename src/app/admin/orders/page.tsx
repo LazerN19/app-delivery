@@ -88,11 +88,21 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
-type Toast = { id: string; title: string; body?: string };
-
+type Toast = { id: string; title: string; body?: string; tone?: "normal" | "success" | "danger" };
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
+
+/** Modal interno para confirmar acciones sin confirm() */
+type ConfirmState =
+  | null
+  | {
+      title: string;
+      body?: string;
+      confirmText?: string;
+      danger?: boolean;
+      onConfirm: () => Promise<void> | void;
+    };
 
 export default function AdminOrders() {
   const router = useRouter();
@@ -111,12 +121,23 @@ export default function AdminOrders() {
 
   // ✅ Toasts internos
   const [toasts, setToasts] = useState<Toast[]>([]);
-  function pushToast(title: string, body?: string) {
+  function pushToast(title: string, body?: string, tone: Toast["tone"] = "normal") {
     const id = uid();
-    setToasts((prev) => [{ id, title, body }, ...prev].slice(0, 3));
-    window.setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4500);
+    setToasts((prev) => [{ id, title, body, tone }, ...prev].slice(0, 4));
+    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4200);
+  }
+
+  // ✅ Confirm modal interno
+  const [confirm, setConfirm] = useState<ConfirmState>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  async function runConfirmAction(fn: () => Promise<void> | void) {
+    setConfirmBusy(true);
+    try {
+      await fn();
+      setConfirm(null);
+    } finally {
+      setConfirmBusy(false);
+    }
   }
 
   function getTrackingUrl(token: string) {
@@ -176,6 +197,7 @@ export default function AdminOrders() {
       console.error(oErr);
       setOrders([]);
       setLoading(false);
+      pushToast("Error cargando pedidos", oErr.message, "danger");
       return;
     }
 
@@ -221,29 +243,13 @@ export default function AdminOrders() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showArchived]);
 
-  // ✅ refs para NO re-suscribirte al canal por cambios de sound.enabled
-  const soundEnabledRef = useRef(false);
-  const soundReadyRef = useRef(false);
-
-  useEffect(() => {
-    soundEnabledRef.current = !!sound.enabled;
-  }, [sound.enabled]);
-
-  useEffect(() => {
-    soundReadyRef.current = !!sound.ready;
-  }, [sound.ready]);
-
-  // ✅ Realtime SOLO INSERT (evita duplicados por UPDATE)
+  // ✅ Realtime SOLO INSERT
   const seenRef = useRef<Set<string>>(new Set());
-
   useEffect(() => {
     if (!restaurant?.id) return;
 
-    // reset de anti-doble por restaurant
-    seenRef.current = new Set();
-
     const channel = supabase
-      .channel(`orders-inserts-${restaurant.id}`)
+      .channel("orders-inserts")
       .on(
         "postgres_changes",
         {
@@ -257,35 +263,13 @@ export default function AdminOrders() {
           const oid = newOrder?.id;
           if (!oid) return;
 
-          // anti-doble (por reconexión o eventos repetidos)
           if (seenRef.current.has(oid)) return;
           seenRef.current.add(oid);
 
-          // refresca lista
           await loadAll(restaurant);
 
-          // toast
-          pushToast(
-            "🛎️ Nuevo pedido",
-            `Folio #${newOrder?.folio ?? "?"} · ${newOrder?.customer_name ?? "Cliente"}`
-          );
-
-          // 🔊 Sonido: SOLO si el usuario ya lo activó
-          // y (idealmente) ya fue "unlock" con un click
-          if (soundEnabledRef.current) {
-            // Si aún no está listo, no molestamos con alerts
-            if (!soundReadyRef.current) {
-              pushToast("🔔 Sonido activo", "Cargando audio…");
-              return;
-            }
-            // play() puede fallar si no hubo gesto de usuario; tu hook debe manejarlo sin alert
-            try {
-              await sound.play();
-            } catch {
-              // No alert (molesta). Solo toast.
-              pushToast("🔇 Sonido bloqueado", "Da click en “🔔 Sonido ON” para habilitar audio.");
-            }
-          }
+          pushToast("🛎️ Nuevo pedido", `Folio #${newOrder?.folio ?? "?"} · ${newOrder?.customer_name ?? "Cliente"}`);
+          sound.play();
         }
       )
       .subscribe();
@@ -294,68 +278,21 @@ export default function AdminOrders() {
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restaurant?.id]);
+  }, [restaurant?.id, sound.enabled]);
 
   async function setStatus(orderId: string, status: (typeof STATUS_KEYS)[number]) {
     if (!restaurant?.id) return;
 
     setSavingMap((m) => ({ ...m, [orderId]: true }));
-
-    const { error } = await supabase
-      .from("orders")
-      .update({ status })
-      .eq("id", orderId)
-      .eq("restaurant_id", restaurant.id);
-
+    const { error } = await supabase.from("orders").update({ status }).eq("id", orderId).eq("restaurant_id", restaurant.id);
     setSavingMap((m) => ({ ...m, [orderId]: false }));
 
-    if (error) alert(error.message);
+    if (error) {
+      pushToast("Error al cambiar estado", error.message, "danger");
+      return;
+    }
+    pushToast("Estado actualizado", `Ahora está: ${STATUS_LABEL[status]}`, "success");
     await loadAll(restaurant);
-  }
-
-  async function archiveOrder(orderId: string) {
-    if (!restaurant?.id) return;
-
-    const ok = confirm("¿Archivar este pedido? Ya no aparecerá en la lista principal.");
-    if (!ok) return;
-
-    setSavingMap((m) => ({ ...m, [orderId]: true }));
-
-    const { error } = await supabase
-      .from("orders")
-      .update({ archived_at: new Date().toISOString() })
-      .eq("id", orderId)
-      .eq("restaurant_id", restaurant.id);
-
-    setSavingMap((m) => ({ ...m, [orderId]: false }));
-
-    if (error) alert(error.message);
-    await loadAll(restaurant);
-  }
-
-  async function restoreOrder(orderId: string) {
-    if (!restaurant?.id) return;
-
-    const ok = confirm("¿Restaurar este pedido? Volverá a aparecer en la lista principal.");
-    if (!ok) return;
-
-    setSavingMap((m) => ({ ...m, [orderId]: true }));
-
-    const { error } = await supabase
-      .from("orders")
-      .update({ archived_at: null })
-      .eq("id", orderId)
-      .eq("restaurant_id", restaurant.id);
-
-    setSavingMap((m) => ({ ...m, [orderId]: false }));
-
-    if (error) alert(error.message);
-    await loadAll(restaurant);
-  }
-
-  async function logout() {
-    await supabase.auth.signOut();
-    router.push("/admin/login");
   }
 
   function formatAddress(o: Order) {
@@ -376,7 +313,6 @@ export default function AdminOrders() {
 
   const filtered = useMemo(() => {
     let base = filter === "all" ? orders : orders.filter((o) => o.status === filter);
-
     const q = normalize(search);
     if (!q) return base;
 
@@ -392,13 +328,12 @@ export default function AdminOrders() {
   async function copyTracking(o: Order) {
     if (!o.public_tracking_token) return;
     const url = getTrackingUrl(o.public_tracking_token);
-
     try {
       await navigator.clipboard.writeText(url);
       setCopiedId(o.id);
       setTimeout(() => setCopiedId((prev) => (prev === o.id ? null : prev)), 1200);
     } catch {
-      prompt("Copia este link:", url);
+      pushToast("No se pudo copiar", "Copia manualmente desde el tracking.", "danger");
     }
   }
 
@@ -406,23 +341,17 @@ export default function AdminOrders() {
     if (!o.public_tracking_token) return;
 
     const url = getTrackingUrl(o.public_tracking_token);
-
     const itemsText =
-      (o.order_items ?? [])
-        .map((it) => `• ${it.qty}× ${it.name_snapshot}`)
-        .join("\n") || "• (sin productos)";
+      (o.order_items ?? []).map((it) => `• ${it.qty}× ${it.name_snapshot}`).join("\n") || "• (sin productos)";
 
     const tipo = o.delivery_type === "delivery" ? "Entrega a domicilio" : "Recoger en sucursal";
-    const estado =
-      o.status in STATUS_LABEL ? STATUS_LABEL[o.status as keyof typeof STATUS_LABEL] : o.status;
+    const estado = o.status in STATUS_LABEL ? STATUS_LABEL[o.status as keyof typeof STATUS_LABEL] : o.status;
 
     const msg =
-      `Hola! ${o.customer_name || ""} \n` +
+      `Hola! ${o.customer_name || ""}\n` +
       `Tu pedido #${o.folio} está: *${estado}*\n\n` +
-      `*Resumen*\n` +
-      `${tipo}\n\n` +
-      `*Productos*\n` +
-      `${itemsText}\n\n` +
+      `*Resumen*\n${tipo}\n\n` +
+      `*Productos*\n${itemsText}\n\n` +
       `*Total:* ${money(o.total)}\n\n` +
       `Seguimiento:\n${url}`;
 
@@ -435,6 +364,72 @@ export default function AdminOrders() {
     window.open(`/t/${o.public_tracking_token}`, "_blank", "noopener,noreferrer");
   }
 
+  async function archiveOrder(o: Order) {
+    if (!restaurant?.id) return;
+
+    setSavingMap((m) => ({ ...m, [o.id]: true }));
+    const { error } = await supabase
+      .from("orders")
+      .update({ archived_at: new Date().toISOString() })
+      .eq("id", o.id)
+      .eq("restaurant_id", restaurant.id);
+    setSavingMap((m) => ({ ...m, [o.id]: false }));
+
+    if (error) {
+      pushToast("No se pudo archivar", error.message, "danger");
+      return;
+    }
+    pushToast("Pedido archivado", `Folio #${o.folio}`, "success");
+    await loadAll(restaurant);
+  }
+
+  async function restoreOrder(o: Order) {
+    if (!restaurant?.id) return;
+
+    setSavingMap((m) => ({ ...m, [o.id]: true }));
+    const { error } = await supabase.from("orders").update({ archived_at: null }).eq("id", o.id).eq("restaurant_id", restaurant.id);
+    setSavingMap((m) => ({ ...m, [o.id]: false }));
+
+    if (error) {
+      pushToast("No se pudo restaurar", error.message, "danger");
+      return;
+    }
+    pushToast("Pedido restaurado", `Folio #${o.folio}`, "success");
+    await loadAll(restaurant);
+  }
+
+  async function hardDeleteOrder(o: Order) {
+    // RPC: delete_order_hard(uuid)
+    setSavingMap((m) => ({ ...m, [o.id]: true }));
+    const { error } = await supabase.rpc("delete_order_hard", { p_order_id: o.id });
+    setSavingMap((m) => ({ ...m, [o.id]: false }));
+
+    if (error) {
+      pushToast("No se pudo borrar", error.message, "danger");
+      return;
+    }
+    pushToast("Pedido borrado", `Folio #${o.folio} eliminado definitivamente`, "success");
+    if (restaurant) await loadAll(restaurant);
+  }
+
+  async function purgeArchived(days: number) {
+    setLoading(true);
+    const { error } = await supabase.rpc("purge_archived_orders", { p_days: days });
+    setLoading(false);
+
+    if (error) {
+      pushToast("No se pudo purgar", error.message, "danger");
+      return;
+    }
+    pushToast("Limpieza completada", `Se borraron archivados de más de ${days} días`, "success");
+    if (restaurant) await loadAll(restaurant);
+  }
+
+  async function logout() {
+    await supabase.auth.signOut();
+    router.push("/admin/login");
+  }
+
   return (
     <div className="min-h-screen bg-black text-white">
       {/* ✅ Toasts */}
@@ -442,13 +437,49 @@ export default function AdminOrders() {
         {toasts.map((t) => (
           <div
             key={t.id}
-            className="w-[320px] rounded-2xl border border-white/10 bg-black/80 backdrop-blur-xl p-4 shadow-[0_24px_70px_rgba(0,0,0,0.55)]"
+            className={[
+              "w-[340px] rounded-2xl border bg-black/80 backdrop-blur-xl p-4 shadow-[0_24px_70px_rgba(0,0,0,0.55)]",
+              t.tone === "success" ? "border-emerald-500/25" : t.tone === "danger" ? "border-red-500/25" : "border-white/10",
+            ].join(" ")}
           >
             <div className="font-semibold">{t.title}</div>
             {t.body ? <div className="text-sm text-white/70 mt-1">{t.body}</div> : null}
           </div>
         ))}
       </div>
+
+      {/* ✅ Modal confirm interno */}
+      {confirm ? (
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70" onClick={() => (confirmBusy ? null : setConfirm(null))} />
+          <div className="relative w-full max-w-md rounded-3xl border border-white/10 bg-black/80 backdrop-blur-xl p-6 shadow-[0_30px_90px_rgba(0,0,0,0.7)]">
+            <div className="text-lg font-semibold">{confirm.title}</div>
+            {confirm.body ? <div className="text-sm text-white/70 mt-2">{confirm.body}</div> : null}
+
+            <div className="mt-5 flex gap-2 justify-end">
+              <button
+                disabled={confirmBusy}
+                onClick={() => setConfirm(null)}
+                className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                disabled={confirmBusy}
+                onClick={() => runConfirmAction(confirm.onConfirm)}
+                className={[
+                  "px-4 py-2 rounded-full border text-sm font-medium transition disabled:opacity-60",
+                  confirm.danger
+                    ? "border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15"
+                    : "border-white/15 bg-white/10 hover:bg-white/15",
+                ].join(" ")}
+              >
+                {confirmBusy ? "Procesando…" : confirm.confirmText || "Confirmar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="sticky top-0 z-20 bg-black/80 backdrop-blur-xl border-b border-white/10">
         <div className="max-w-4xl mx-auto px-5 py-4 flex items-start justify-between gap-4">
@@ -469,28 +500,52 @@ export default function AdminOrders() {
               Archivados
             </label>
 
-            {/* ✅ Botón sonido (sin alert molesto) */}
+            {/* ✅ Botón sonido */}
             <button
-  className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
-  onClick={async () => {
-    if (!sound.enabled) {
-      const ok = await sound.unlock();
-      if (!ok) {
-        pushToast("🔇 Sonido bloqueado", "Da un click en cualquier parte de la página y vuelve a intentar.");
-        return;
-      }
-      sound.setEnabled(true);
-      pushToast("🔔 Sonido activado", "Listo para nuevos pedidos.");
-    } else {
-      sound.setEnabled(false);
-      pushToast("🔕 Sonido desactivado");
-    }
-  }}
-  title="Activa el sonido (requiere un click para desbloquear)"
->
-  {sound.enabled ? "🔔 Sonido ON" : "🔕 Activar sonido"}
-</button>
+              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              onClick={async () => {
+                if (!sound.enabled) {
+                  const ok = await sound.unlock();
+                  if (!ok) {
+                    pushToast("Sonido bloqueado", "Da click otra vez o interactúa con la página.", "danger");
+                    return;
+                  }
+                  sound.setEnabled(true);
+                  pushToast("🔔 Sonido activado", sound.ready ? "Listo para nuevos pedidos." : "Cargando sonido…", "success");
+                } else {
+                  sound.setEnabled(false);
+                  pushToast("🔕 Sonido desactivado");
+                }
+              }}
+            >
+              {sound.enabled ? "🔔 Sonido ON" : "🔕 Activar sonido"}
+            </button>
 
+            {/* ✅ NUEVO: Menú (productos/categorías) */}
+            <button
+              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              onClick={() => router.push("/admin/menu")}
+              disabled={!restaurant}
+              title="Editar productos y categorías"
+            >
+              Menú
+            </button>
+
+            {/* ✅ Limpieza (purgar) */}
+            <button
+              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              onClick={() =>
+                setConfirm({
+                  title: "Borrar archivados antiguos",
+                  body: "Esto eliminará DEFINITIVAMENTE pedidos archivados viejos (y sus productos). Recomendado para ahorrar almacenamiento.",
+                  confirmText: "Purgar 30 días",
+                  danger: true,
+                  onConfirm: async () => purgeArchived(30),
+                })
+              }
+            >
+              Limpiar
+            </button>
 
             <button
               className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
@@ -590,12 +645,12 @@ export default function AdminOrders() {
                 <div className="text-xs text-white/50 whitespace-nowrap">{new Date(o.created_at).toLocaleString()}</div>
               </div>
 
+              {/* Tracking */}
               {hasToken ? (
                 <div className="mt-4 flex gap-2 flex-wrap">
                   <button
                     onClick={() => copyTracking(o)}
                     className="px-4 py-2 rounded-full border text-sm transition border-white/15 bg-white/10 hover:bg-white/15"
-                    title="Copiar link de seguimiento"
                   >
                     {copiedId === o.id ? "✅ Copiado" : "Copiar tracking"}
                   </button>
@@ -603,7 +658,6 @@ export default function AdminOrders() {
                   <button
                     onClick={() => openWhatsApp(o)}
                     className="px-4 py-2 rounded-full border text-sm transition border-emerald-500/25 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
-                    title="Enviar link por WhatsApp"
                   >
                     WhatsApp cliente
                   </button>
@@ -611,7 +665,6 @@ export default function AdminOrders() {
                   <button
                     onClick={() => openTracking(o)}
                     className="px-4 py-2 rounded-full border text-sm transition border-white/10 bg-white/5 hover:bg-white/10 text-white/80"
-                    title="Abrir seguimiento en una nueva pestaña"
                   >
                     Abrir tracking
                   </button>
@@ -620,6 +673,7 @@ export default function AdminOrders() {
                 <div className="mt-4 text-xs text-white/50">Sin token de tracking.</div>
               )}
 
+              {/* Productos */}
               <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 p-4">
                 <div className="text-sm font-medium mb-2">Productos</div>
 
@@ -654,9 +708,7 @@ export default function AdminOrders() {
                       </div>
                       <div className="flex items-center justify-between text-white/70">
                         <span>Envío</span>
-                        <span className="text-white/90 font-medium">
-                          {money(o.delivery_type === "delivery" ? o.delivery_fee : 0)}
-                        </span>
+                        <span className="text-white/90 font-medium">{money(o.delivery_type === "delivery" ? o.delivery_fee : 0)}</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-white/80">Total</span>
@@ -667,6 +719,7 @@ export default function AdminOrders() {
                 )}
               </div>
 
+              {/* Acciones */}
               <div className="mt-4 flex gap-2 flex-wrap">
                 {!showArchived ? (
                   <>
@@ -688,32 +741,56 @@ export default function AdminOrders() {
                       );
                     })}
 
-                    {(o.status === "delivered" || o.status === "cancelled") && (
+                    {(o.status === "delivered" || o.status === "cancelled") ? (
                       <button
                         disabled={!!savingMap[o.id]}
-                        onClick={() => archiveOrder(o.id)}
-                        className={[
-                          "px-4 py-2 rounded-full border text-sm transition",
-                          "border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15",
-                          savingMap[o.id] ? "opacity-60 cursor-not-allowed" : "",
-                        ].join(" ")}
+                        onClick={() =>
+                          setConfirm({
+                            title: `Archivar pedido #${o.folio}`,
+                            body: "Se moverá a Archivados. Puedes restaurarlo después.",
+                            confirmText: "Archivar",
+                            onConfirm: async () => archiveOrder(o),
+                          })
+                        }
+                        className="px-4 py-2 rounded-full border text-sm transition border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15 disabled:opacity-60"
                       >
                         Archivar
                       </button>
-                    )}
+                    ) : null}
                   </>
                 ) : (
-                  <button
-                    disabled={!!savingMap[o.id]}
-                    onClick={() => restoreOrder(o.id)}
-                    className={[
-                      "px-4 py-2 rounded-full border text-sm transition",
-                      "border-white/15 bg-white/10 hover:bg-white/15",
-                      savingMap[o.id] ? "opacity-60 cursor-not-allowed" : "",
-                    ].join(" ")}
-                  >
-                    Restaurar
-                  </button>
+                  <>
+                    <button
+                      disabled={!!savingMap[o.id]}
+                      onClick={() =>
+                        setConfirm({
+                          title: `Restaurar pedido #${o.folio}`,
+                          body: "Volverá a aparecer en la lista principal.",
+                          confirmText: "Restaurar",
+                          onConfirm: async () => restoreOrder(o),
+                        })
+                      }
+                      className="px-4 py-2 rounded-full border text-sm transition border-white/15 bg-white/10 hover:bg-white/15 disabled:opacity-60"
+                    >
+                      Restaurar
+                    </button>
+
+                    <button
+                      disabled={!!savingMap[o.id]}
+                      onClick={() =>
+                        setConfirm({
+                          title: `Borrar DEFINITIVAMENTE #${o.folio}`,
+                          body: "Esto elimina el pedido y sus productos. No se puede deshacer.",
+                          confirmText: "Borrar definitivo",
+                          danger: true,
+                          onConfirm: async () => hardDeleteOrder(o),
+                        })
+                      }
+                      className="px-4 py-2 rounded-full border text-sm transition border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15 disabled:opacity-60"
+                    >
+                      Borrar definitivo
+                    </button>
+                  </>
                 )}
               </div>
             </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type OrderItem = {
@@ -105,9 +105,35 @@ function formatAddress(o: Order) {
 export default function TrackingClient({ initial }: { initial: Order }) {
   const [order, setOrder] = useState<Order>(initial);
 
+  // 👇 guardamos el token/id en refs para no depender de closures viejos
+  const orderIdRef = useRef<string>(initial.id);
+  const tokenRef = useRef<string>(initial.public_tracking_token);
+
+  useEffect(() => {
+    orderIdRef.current = order.id;
+    tokenRef.current = order.public_tracking_token;
+  }, [order.id, order.public_tracking_token]);
+
   const rest = order.restaurants;
   const accent = deriveAccent(rest);
   const brand = getBrand(rest);
+
+  // ✅ Función única para refrescar pedido (se usa en realtime + polling)
+  async function refreshOrder() {
+    const oid = orderIdRef.current;
+
+    const { data } = await supabase
+      .from("orders")
+      .select(
+        `id, folio, status, created_at, delivery_type, address, total, subtotal, delivery_fee, notes, public_tracking_token,
+         restaurants (id,name,slug,logo_url,brand_icon,brand_text,brand_tagline,accent_color,brand_mode),
+         order_items (id,name_snapshot,price_snapshot,qty,notes)`
+      )
+      .eq("id", oid)
+      .single();
+
+    if (data) setOrder(data as any);
+  }
 
   // ✅ Realtime: se actualiza cuando cambie el status del pedido
   useEffect(() => {
@@ -117,17 +143,7 @@ export default function TrackingClient({ initial }: { initial: Order }) {
         "postgres_changes",
         { event: "UPDATE", schema: "public", table: "orders", filter: `id=eq.${order.id}` },
         async () => {
-          const { data } = await supabase
-            .from("orders")
-            .select(
-              `id, folio, status, created_at, delivery_type, address, total, subtotal, delivery_fee, notes, public_tracking_token,
-               restaurants (id,name,slug,logo_url,brand_icon,brand_text,brand_tagline,accent_color,brand_mode),
-               order_items (id,name_snapshot,price_snapshot,qty,notes)`
-            )
-            .eq("id", order.id)
-            .single();
-
-          if (data) setOrder(data as any);
+          await refreshOrder();
         }
       )
       .subscribe();
@@ -135,7 +151,35 @@ export default function TrackingClient({ initial }: { initial: Order }) {
     return () => {
       supabase.removeChannel(channel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order.id]);
+
+  // ✅ Polling cada 5s (fallback, como antes)
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      refreshOrder();
+    }, 5000);
+
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ✅ Cuando vuelves a la pestaña / foco, refresca (móviles suelen pausar timers)
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "visible") refreshOrder();
+    };
+    const onFocus = () => refreshOrder();
+
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onFocus);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const statusLabel = STATUS_LABEL[order.status] ?? order.status;
 
@@ -264,7 +308,7 @@ export default function TrackingClient({ initial }: { initial: Order }) {
             })}
           </div>
 
-          <div className="text-xs text-white/45 mt-4">Se actualiza automáticamente.</div>
+          <div className="text-xs text-white/45 mt-4">Se actualiza automáticamente (realtime + cada 5s).</div>
         </section>
 
         {/* Productos */}

@@ -503,9 +503,7 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
             </p>
           </div>
 
-          <div className="hidden sm:block text-xs text-white/45">
-            {canOrder ? "Tip: agrega fotos y descripciones para que el menú venda más." : "No se pueden hacer pedidos ahora."}
-          </div>
+          
         </div>
 
         {/* VISTA TODO */}
@@ -571,7 +569,7 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
         )}
 
         <div className="mt-10 text-center text-xs text-white/40">
-          ¿Eres dueño de un negocio? Esta app puede configurarse con tu logo/colores en minutos.
+          App Elaborada por SiteApp.mx
         </div>
       </main>
 

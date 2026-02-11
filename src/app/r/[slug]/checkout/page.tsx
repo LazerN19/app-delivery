@@ -63,6 +63,35 @@ function statusPill(isOpen: boolean) {
     : { label: "Cerrado", icon: "🔴", border: "rgba(239,68,68,0.30)", bg: "rgba(239,68,68,0.12)" };
 }
 
+/**
+ * ✅ IMPORTANTE:
+ * Field debe estar FUERA de CheckoutPage, para que NO se remonte en cada render.
+ * Si está dentro, React lo desmonta/monta y el input pierde foco (solo deja 1 letra).
+ */
+function Field({
+  value,
+  onChange,
+  placeholder,
+  required,
+  type = "text",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  required?: boolean;
+  type?: string;
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={required ? `${placeholder} *` : placeholder}
+      className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none placeholder:text-white/35 focus:border-white/20"
+    />
+  );
+}
+
 export default function CheckoutPage() {
   const params = useParams();
   const slug = (params?.slug as string) || "";
@@ -147,10 +176,10 @@ export default function CheckoutPage() {
     setPlacing(true);
 
     const payloadItems = cart.items.map((i) => ({
-  menu_item_id: i.id,
-  qty: i.qty,
-  notes: (notes.trim() || null), // fallback por ahora
-}));
+      menu_item_id: i.id,
+      qty: i.qty,
+      notes: notes.trim() || null, // fallback por ahora
+    }));
 
     const address =
       deliveryType === "delivery"
@@ -190,30 +219,6 @@ export default function CheckoutPage() {
     }
 
     router.push(`/r/${slug}`);
-  }
-
-  function Field({
-    value,
-    onChange,
-    placeholder,
-    required,
-    type = "text",
-  }: {
-    value: string;
-    onChange: (v: string) => void;
-    placeholder: string;
-    required?: boolean;
-    type?: string;
-  }) {
-    return (
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={required ? `${placeholder} *` : placeholder}
-        className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none placeholder:text-white/35 focus:border-white/20"
-      />
-    );
   }
 
   return (
@@ -265,9 +270,7 @@ export default function CheckoutPage() {
 
                 <div className="text-xs text-white/60 truncate">
                   {loadingRestaurant ? "Cargando..." : brand ? brand.text : restaurant?.name ?? "Restaurante"}
-                  {open?.reason ? (
-                    <span className="text-white/45"> · {open.reason}</span>
-                  ) : null}
+                  {open?.reason ? <span className="text-white/45"> · {open.reason}</span> : null}
                 </div>
               </div>
             </div>
@@ -315,7 +318,7 @@ export default function CheckoutPage() {
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
           {/* Left: forms */}
           <div className="lg:col-span-3 space-y-5">
-            {/* Pedido (mobile también) */}
+            {/* Pedido */}
             <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-semibold tracking-tight">Tu pedido</h2>
@@ -388,7 +391,11 @@ export default function CheckoutPage() {
                       : "border-white/10 bg-white/5 hover:bg-white/10",
                   ].join(" ")}
                   onClick={() => setDeliveryType("delivery")}
-                  style={deliveryType === "delivery" ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` } : undefined}
+                  style={
+                    deliveryType === "delivery"
+                      ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` }
+                      : undefined
+                  }
                 >
                   Entrega
                 </button>
@@ -401,7 +408,11 @@ export default function CheckoutPage() {
                       : "border-white/10 bg-white/5 hover:bg-white/10",
                   ].join(" ")}
                   onClick={() => setDeliveryType("pickup")}
-                  style={deliveryType === "pickup" ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` } : undefined}
+                  style={
+                    deliveryType === "pickup"
+                      ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` }
+                      : undefined
+                  }
                 >
                   Recoger
                 </button>
@@ -447,9 +458,7 @@ export default function CheckoutPage() {
               </button>
 
               {!validRestaurant ? (
-                <div className="text-xs text-white/45">
-                  Tu carrito es de otro restaurante. Vacíalo para continuar.
-                </div>
+                <div className="text-xs text-white/45">Tu carrito es de otro restaurante. Vacíalo para continuar.</div>
               ) : null}
             </section>
           </div>
@@ -499,9 +508,7 @@ export default function CheckoutPage() {
                 </Link>
               </div>
 
-              <div className="mt-4 text-xs text-white/45">
-                Tip: pide un teléfono válido para contactar al cliente rápido.
-              </div>
+              <div className="mt-4 text-xs text-white/45">Tip: pide un teléfono válido para contactar al cliente rápido.</div>
             </section>
 
             <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
