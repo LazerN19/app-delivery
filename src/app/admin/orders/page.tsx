@@ -130,6 +130,12 @@ export default function AdminOrders() {
 
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // ✅ Mobile dropdown menu
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [showArchived, restaurant?.id]);
+
   // ✅ Toasts internos
   const [toasts, setToasts] = useState<Toast[]>([]);
   function pushToast(title: string, body?: string, tone: Toast["tone"] = "normal") {
@@ -427,6 +433,21 @@ export default function AdminOrders() {
     router.push("/admin/login");
   }
 
+  async function toggleSound() {
+    if (!sound.enabled) {
+      const ok = await sound.unlock();
+      if (!ok) {
+        pushToast("Sonido bloqueado", "Da click otra vez o interactúa con la página.", "danger");
+        return;
+      }
+      sound.setEnabled(true);
+      pushToast("🔔 Sonido activado", sound.ready ? "Listo para nuevos pedidos." : "Cargando sonido…", "success");
+    } else {
+      sound.setEnabled(false);
+      pushToast("🔕 Sonido desactivado");
+    }
+  }
+
   const accent = deriveAccent(restaurant);
 
   return (
@@ -519,7 +540,11 @@ export default function AdminOrders() {
 
                   <span
                     className="inline-flex items-center gap-2 text-[11px] px-2.5 py-1 rounded-full border"
-                    style={{ borderColor: `${accent}40`, backgroundColor: `${accent}14`, color: "rgba(255,255,255,0.88)" }}
+                    style={{
+                      borderColor: `${accent}40`,
+                      backgroundColor: `${accent}14`,
+                      color: "rgba(255,255,255,0.88)",
+                    }}
                   >
                     <span className="text-[10px]">⚡</span>
                     <span className="font-medium">{showArchived ? "Archivados" : "Activos"}</span>
@@ -537,58 +562,132 @@ export default function AdminOrders() {
             </div>
           </div>
 
-          <div className="flex gap-2 items-center flex-wrap justify-end">
-            <label className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/12 bg-white/5 text-sm select-none">
-              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
-              Archivados
-            </label>
+          {/* ✅ Desktop actions + ✅ Mobile dropdown */}
+          <div className="flex items-center justify-end gap-2">
+            {/* Desktop */}
+            <div className="hidden sm:flex gap-2 items-center flex-wrap justify-end">
+              <label className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/12 bg-white/5 text-sm select-none">
+                <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+                Archivados
+              </label>
 
-            <button
-              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
-              onClick={async () => {
-                if (!sound.enabled) {
-                  const ok = await sound.unlock();
-                  if (!ok) {
-                    pushToast("Sonido bloqueado", "Da click otra vez o interactúa con la página.", "danger");
-                    return;
-                  }
-                  sound.setEnabled(true);
-                  pushToast("🔔 Sonido activado", sound.ready ? "Listo para nuevos pedidos." : "Cargando sonido…", "success");
-                } else {
-                  sound.setEnabled(false);
-                  pushToast("🔕 Sonido desactivado");
-                }
-              }}
-              style={{ borderColor: `${accent}35` }}
-            >
-              {sound.enabled ? "🔔 Sonido ON" : "🔕 Activar sonido"}
-            </button>
+              <button
+                className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
+                onClick={toggleSound}
+                style={{ borderColor: `${accent}35` }}
+              >
+                {sound.enabled ? "🔔 Sonido ON" : "🔕 Activar sonido"}
+              </button>
 
-            <button
-              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
-              onClick={() => router.push("/admin/menu")}
-              disabled={!restaurant}
-              title="Editar productos y categorías"
-              style={{ borderColor: `${accent}35` }}
-            >
-              Menú
-            </button>
+              <button
+                className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
+                onClick={() => router.push("/admin/menu")}
+                disabled={!restaurant}
+                title="Editar productos y categorías"
+                style={{ borderColor: `${accent}35` }}
+              >
+                Menú
+              </button>
 
-            <button
-              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
-              onClick={() => router.push("/admin/settings")}
-              disabled={!restaurant}
-              style={{ borderColor: `${accent}35` }}
-            >
-              Ajustes
-            </button>
+              <button
+                className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
+                onClick={() => router.push("/admin/settings")}
+                disabled={!restaurant}
+                style={{ borderColor: `${accent}35` }}
+              >
+                Ajustes
+              </button>
 
-            <button
-              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
-              onClick={logout}
-            >
-              Salir
-            </button>
+              <button
+                className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
+                onClick={logout}
+              >
+                Salir
+              </button>
+            </div>
+
+            {/* Mobile dropdown button */}
+            <div className="sm:hidden relative">
+              <button
+                className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
+                onClick={() => setMobileMenuOpen((v) => !v)}
+                style={{ borderColor: `${accent}35` }}
+                aria-expanded={mobileMenuOpen}
+                aria-label="Abrir menú"
+              >
+                ☰
+              </button>
+
+              {/* overlay */}
+              {mobileMenuOpen ? (
+                <div className="fixed inset-0 z-30" onClick={() => setMobileMenuOpen(false)} />
+              ) : null}
+
+              {/* dropdown */}
+              <div
+                className={[
+                  "absolute right-0 mt-2 z-40 w-[240px]",
+                  "rounded-3xl border border-white/10 bg-black/85 backdrop-blur-xl",
+                  "shadow-[0_30px_90px_rgba(0,0,0,0.7)]",
+                  mobileMenuOpen ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 -translate-y-1 pointer-events-none",
+                  "transition duration-150",
+                ].join(" ")}
+              >
+                <div className="p-2">
+                  <button
+                    className="w-full px-4 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm text-left"
+                    onClick={() => {
+                      setShowArchived((v) => !v);
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    {showArchived ? "✅ Archivados" : "Archivados"}
+                  </button>
+
+                  <button
+                    className="mt-2 w-full px-4 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm text-left"
+                    onClick={async () => {
+                      await toggleSound();
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    {sound.enabled ? "🔔 Sonido ON" : "🔕 Activar sonido"}
+                  </button>
+
+                  <button
+                    className="mt-2 w-full px-4 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm text-left"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      router.push("/admin/menu");
+                    }}
+                    disabled={!restaurant}
+                  >
+                    Menú
+                  </button>
+
+                  <button
+                    className="mt-2 w-full px-4 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm text-left"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      router.push("/admin/settings");
+                    }}
+                    disabled={!restaurant}
+                  >
+                    Ajustes
+                  </button>
+
+                  <button
+                    className="mt-2 w-full px-4 py-3 rounded-2xl border border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15 transition text-sm text-left"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      logout();
+                    }}
+                  >
+                    Salir
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -613,7 +712,7 @@ export default function AdminOrders() {
           </div>
         </div>
 
-        {/* Status filters (con snap + touch horizontal como MenuClient) */}
+        {/* Status filters (snap + touch horizontal como MenuClient) */}
         <div className="px-5 pb-4">
           <div
             className={[
@@ -716,7 +815,11 @@ export default function AdminOrders() {
                   <button
                     onClick={() => openWhatsApp(o)}
                     className="px-4 py-2 rounded-full border text-sm transition"
-                    style={{ borderColor: "rgba(34,197,94,0.30)", backgroundColor: "rgba(34,197,94,0.14)", color: "rgba(255,255,255,0.90)" }}
+                    style={{
+                      borderColor: "rgba(34,197,94,0.30)",
+                      backgroundColor: "rgba(34,197,94,0.14)",
+                      color: "rgba(255,255,255,0.90)",
+                    }}
                   >
                     WhatsApp cliente
                   </button>
@@ -815,7 +918,11 @@ export default function AdminOrders() {
                           })
                         }
                         className="px-4 py-2 rounded-full border text-sm transition disabled:opacity-60"
-                        style={{ borderColor: "rgba(239,68,68,0.30)", backgroundColor: "rgba(239,68,68,0.14)", color: "rgba(255,255,255,0.90)" }}
+                        style={{
+                          borderColor: "rgba(239,68,68,0.30)",
+                          backgroundColor: "rgba(239,68,68,0.14)",
+                          color: "rgba(255,255,255,0.90)",
+                        }}
                       >
                         Archivar
                       </button>
@@ -851,18 +958,17 @@ export default function AdminOrders() {
                         })
                       }
                       className="px-4 py-2 rounded-full border text-sm transition disabled:opacity-60"
-                      style={{ borderColor: "rgba(239,68,68,0.30)", backgroundColor: "rgba(239,68,68,0.14)", color: "rgba(255,255,255,0.90)" }}
+                      style={{
+                        borderColor: "rgba(239,68,68,0.30)",
+                        backgroundColor: "rgba(239,68,68,0.14)",
+                        color: "rgba(255,255,255,0.90)",
+                      }}
                     >
                       Borrar definitivo
                     </button>
                   </>
                 )}
               </div>
-
-              <div
-                className="pointer-events-none mt-4 h-[1px] w-full opacity-0 group-hover:opacity-100 transition"
-                style={{ background: `linear-gradient(90deg, transparent, ${accent}55, transparent)` }}
-              />
             </div>
           );
         })}

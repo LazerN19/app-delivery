@@ -120,6 +120,7 @@ function ItemCard({
 }) {
   const available = it.is_available !== false;
   const disabled = !canOrder || !available;
+  const hasImage = Boolean(it.image_url);
 
   return (
     <div
@@ -130,19 +131,17 @@ function ItemCard({
       ].join(" ")}
       style={{ boxShadow: `0 24px 60px rgba(0,0,0,0.45)` }}
     >
-      {/* ✅ FOTO */}
-      <div className="mb-4">
-        {it.image_url ? (
+      {/* ✅ FOTO: solo si existe. Si no, dejamos un espaciado fijo discreto (sin cuadro). */}
+      {hasImage ? (
+        <div className="mb-4">
           <div className="h-36 w-full rounded-2xl overflow-hidden border border-white/10 bg-white/5">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={it.image_url} alt={it.name} className="h-full w-full object-cover" />
+            <img src={it.image_url!} alt={it.name} className="h-full w-full object-cover" />
           </div>
-        ) : (
-          <div className="h-36 w-full rounded-2xl border border-white/10 bg-white/5 flex items-center justify-center text-xs text-white/35">
-            Sin foto
-          </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        <div className="pt-1 mb-3" aria-hidden="true" />
+      )}
 
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
@@ -172,7 +171,9 @@ function ItemCard({
           onClick={() => onAdd(it)}
           className={[
             "px-4 py-2 rounded-full border text-sm font-medium transition",
-            !disabled ? "border-white/10 bg-white/10 hover:bg-white/15" : "border-white/10 bg-white/5 text-white/40 cursor-not-allowed",
+            !disabled
+              ? "border-white/10 bg-white/10 hover:bg-white/15"
+              : "border-white/10 bg-white/5 text-white/40 cursor-not-allowed",
           ].join(" ")}
           style={!disabled ? { borderColor: `${accent}45`, backgroundColor: `${accent}16` } : undefined}
         >
@@ -271,13 +272,8 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
     setDrawerOpen(true);
   }
 
-  function countAllVisible() {
-    return filteredItems.length;
-  }
-
   return (
-  <div className="min-h-screen bg-black text-white overflow-x-hidden" style={{ overflowX: "clip" as any }}>
-
+    <div className="min-h-screen bg-black text-white overflow-x-hidden" style={{ overflowX: "clip" as any }}>
       {/* Fondo */}
       <div
         className="pointer-events-none fixed inset-0 opacity-60"
@@ -394,7 +390,9 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
         {!canOrder ? (
           <div className="px-5 pb-4">
             <div className="mx-auto max-w-5xl rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/75">
-              <div className="font-medium">{restaurant?.is_active ? "Restaurante cerrado" : "Restaurante no disponible"}</div>
+              <div className="font-medium">
+                {restaurant?.is_active ? "Restaurante cerrado" : "Restaurante no disponible"}
+              </div>
               <div className="text-xs text-white/60 mt-1">{open?.reason || "No disponible"}</div>
             </div>
           </div>
@@ -422,48 +420,46 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
         </div>
 
         {/* Tabs */}
-        {/* Tabs */}
-<div className="px-5 pb-4">
-  <div
-    className={[
-      "mx-auto max-w-5xl flex gap-2 overflow-x-auto no-scrollbar",
-      "select-none",
-      "snap-x snap-mandatory",
-      "overscroll-x-contain overscroll-y-none",
-      "touch-pan-x",
-    ].join(" ")}
-    style={{
-      WebkitOverflowScrolling: "touch",
-      touchAction: "pan-x", // 🔥 clave: solo gesto horizontal
-    }}
-  >
-    {tabs.map((c) => {
-      const active = c.id === activeCat;
+        <div className="px-5 pb-4">
+          <div
+            className={[
+              "mx-auto max-w-5xl flex gap-2 overflow-x-auto no-scrollbar",
+              "select-none",
+              "snap-x snap-mandatory",
+              "overscroll-x-contain overscroll-y-none",
+              "touch-pan-x",
+            ].join(" ")}
+            style={{
+              WebkitOverflowScrolling: "touch",
+              touchAction: "pan-x",
+            }}
+          >
+            {tabs.map((c) => {
+              const active = c.id === activeCat;
 
-      return (
-        <button
-          key={c.id}
-          onClick={() => setActiveCat(c.id)}
-          className={[
-            "relative px-4 py-2 rounded-full border text-sm whitespace-nowrap transition",
-            "snap-start",
-            active ? "bg-white/10 border-white/15" : "bg-white/5 border-white/10 hover:bg-white/10",
-          ].join(" ")}
-          style={active ? { borderColor: `${accent}50`, backgroundColor: `${accent}14` } : undefined}
-        >
-          {c.name}
-          {active ? (
-            <span
-              className="absolute -bottom-[6px] left-1/2 -translate-x-1/2 h-[3px] w-10 rounded-full"
-              style={{ backgroundColor: accent }}
-            />
-          ) : null}
-        </button>
-      );
-    })}
-  </div>
-</div>
-
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => setActiveCat(c.id)}
+                  className={[
+                    "relative px-4 py-2 rounded-full border text-sm whitespace-nowrap transition",
+                    "snap-start",
+                    active ? "bg-white/10 border-white/15" : "bg-white/5 border-white/10 hover:bg-white/10",
+                  ].join(" ")}
+                  style={active ? { borderColor: `${accent}50`, backgroundColor: `${accent}14` } : undefined}
+                >
+                  {c.name}
+                  {active ? (
+                    <span
+                      className="absolute -bottom-[6px] left-1/2 -translate-x-1/2 h-[3px] w-10 rounded-full"
+                      style={{ backgroundColor: accent }}
+                    />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </header>
 
       {/* Aviso si el carrito es de otro restaurante */}
@@ -499,11 +495,9 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
             <p className="text-sm text-white/55">
               {activeCat === "__all__"
                 ? `${filteredItems.length} ${filteredItems.length === 1 ? "producto" : "productos"}`
-                : `${activeItems.length} ${activeItems.length === 1 ? "producto" : "productos"}`}
+                : `${(itemsByCat.get(activeCat) || []).length} ${((itemsByCat.get(activeCat) || []).length === 1) ? "producto" : "productos"}`}
             </p>
           </div>
-
-          
         </div>
 
         {/* VISTA TODO */}
@@ -547,37 +541,40 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
         ) : (
           /* VISTA POR CATEGORÍA */
           <>
-            {activeItems.length === 0 ? (
-              <div className="rounded-3xl border border-white/10 bg-white/5 p-6 text-white/65">
-                No hay productos en esta categoría.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {activeItems.map((it) => (
-                  <ItemCard
-                    key={it.id}
-                    it={it}
-                    accent={accent}
-                    canOrder={canOrder}
-                    deliveryFee={deliveryFee}
-                    onAdd={onAddToCart}
-                  />
-                ))}
-              </div>
-            )}
+            {(() => {
+              const activeItems = itemsByCat.get(activeCat) || [];
+              return activeItems.length === 0 ? (
+                <div className="rounded-3xl border border-white/10 bg-white/5 p-6 text-white/65">
+                  No hay productos en esta categoría.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {activeItems.map((it) => (
+                    <ItemCard
+                      key={it.id}
+                      it={it}
+                      accent={accent}
+                      canOrder={canOrder}
+                      deliveryFee={deliveryFee}
+                      onAdd={onAddToCart}
+                    />
+                  ))}
+                </div>
+              );
+            })()}
           </>
         )}
 
-        <div className="mt-10 text-center text-xs text-white/40">
-          App Elaborada por SiteApp.mx
-        </div>
+        <div className="mt-10 text-center text-xs text-white/40">App Elaborada por SiteApp.mx</div>
       </main>
 
       {/* DRAWER CARRITO */}
       <div className={["fixed inset-0 z-40", drawerOpen ? "" : "pointer-events-none"].join(" ")}>
         {/* overlay */}
         <div
-          className={["absolute inset-0 bg-black/60 transition-opacity", drawerOpen ? "opacity-100" : "opacity-0"].join(" ")}
+          className={["absolute inset-0 bg-black/60 transition-opacity", drawerOpen ? "opacity-100" : "opacity-0"].join(
+            " "
+          )}
           onClick={() => setDrawerOpen(false)}
         />
         {/* panel */}

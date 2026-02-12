@@ -65,6 +65,9 @@ export default function AdminMenuPage() {
   const [search, setSearch] = useState("");
   const [catFilter, setCatFilter] = useState<string>("__all__");
 
+  // ✅ Mobile dropdown
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
   // Create category
   const [newCatName, setNewCatName] = useState("");
   const [creatingCat, setCreatingCat] = useState(false);
@@ -148,6 +151,11 @@ export default function AdminMenuPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ si cambia restaurante, cierra menú móvil
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [restaurant?.id]);
+
   const accent = deriveAccent(restaurant);
 
   const catsSorted = useMemo(() => {
@@ -210,7 +218,6 @@ export default function AdminMenuPage() {
       .eq("restaurant_id", restaurant.id);
 
     setSavingCat(false);
-
     if (error) return alert(error.message);
 
     setEditingCatId(null);
@@ -333,7 +340,11 @@ export default function AdminMenuPage() {
       image_url,
     };
 
-    const { error } = await supabase.from("menu_items").update(payload).eq("id", editItem.id).eq("restaurant_id", restaurant.id);
+    const { error } = await supabase
+      .from("menu_items")
+      .update(payload)
+      .eq("id", editItem.id)
+      .eq("restaurant_id", restaurant.id);
 
     setSavingItem(false);
     if (error) return alert(error.message);
@@ -437,7 +448,8 @@ export default function AdminMenuPage() {
             </div>
           </div>
 
-          <div className="flex gap-2 items-center flex-wrap justify-end">
+          {/* ✅ Desktop actions */}
+          <div className="hidden sm:flex gap-2 items-center flex-wrap justify-end">
             <button
               className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
               onClick={() => router.push("/admin/orders")}
@@ -463,6 +475,66 @@ export default function AdminMenuPage() {
               Salir
             </button>
           </div>
+
+          {/* ✅ Mobile dropdown */}
+          <div className="sm:hidden relative flex items-center justify-end">
+            <button
+              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
+              onClick={() => setMobileMenuOpen((v) => !v)}
+              disabled={!restaurant}
+              aria-expanded={mobileMenuOpen}
+              aria-label="Abrir menú"
+              style={{ borderColor: `${accent}35` }}
+            >
+              ☰
+            </button>
+
+            {mobileMenuOpen ? <div className="fixed inset-0 z-30" onClick={() => setMobileMenuOpen(false)} /> : null}
+
+            <div
+              className={[
+                "absolute right-0 top-full mt-2 z-40 w-[240px]",
+                "rounded-3xl border border-white/10 bg-black/85 backdrop-blur-xl",
+                "shadow-[0_30px_90px_rgba(0,0,0,0.7)]",
+                mobileMenuOpen ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 -translate-y-1 pointer-events-none",
+                "transition duration-150",
+              ].join(" ")}
+            >
+              <div className="p-2">
+                <button
+                  className="w-full px-4 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm text-left"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    router.push("/admin/orders");
+                  }}
+                  disabled={!restaurant}
+                >
+                  Pedidos
+                </button>
+
+                <button
+                  className="mt-2 w-full px-4 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm text-left"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    router.push("/admin/settings");
+                  }}
+                  disabled={!restaurant}
+                >
+                  Ajustes
+                </button>
+
+                <button
+                  className="mt-2 w-full px-4 py-3 rounded-2xl border border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15 transition text-sm text-left"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    logout();
+                  }}
+                >
+                  Salir
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Search */}
@@ -486,7 +558,7 @@ export default function AdminMenuPage() {
           </div>
         </div>
 
-        {/* Tabs (reemplaza el select para look tipo MenuClient) */}
+        {/* Tabs */}
         <div className="px-5 pb-4">
           <div
             className={[
@@ -683,18 +755,19 @@ export default function AdminMenuPage() {
                   className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none min-h-[84px] placeholder:text-white/35"
                 />
 
-                <div className="flex gap-2 flex-col md:flex-row">
+                {/* ✅ FIX: no se sale el botón Agregar */}
+                <div className="flex gap-2 flex-col md:flex-row md:flex-nowrap md:items-stretch">
                   <input
                     value={newItemPrice}
                     onChange={(e) => setNewItemPrice(e.target.value)}
                     placeholder="Precio (Ej: 120)"
-                    className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/35"
+                    className="flex-1 min-w-0 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/35"
                   />
 
                   <select
                     value={newItemCategoryId ?? ""}
                     onChange={(e) => setNewItemCategoryId(e.target.value ? e.target.value : null)}
-                    className="flex-1 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
+                    className="flex-1 min-w-0 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
                   >
                     <option value="">Sin categoría</option>
                     {catsSorted.map((c) => (
@@ -707,7 +780,7 @@ export default function AdminMenuPage() {
                   <button
                     onClick={createItem}
                     disabled={creatingItem}
-                    className="px-6 py-3 rounded-2xl border text-sm font-medium transition disabled:opacity-60"
+                    className="w-full md:w-[140px] md:shrink-0 px-5 py-3 rounded-2xl border text-sm font-medium transition disabled:opacity-60"
                     style={{ borderColor: `${accent}45`, backgroundColor: `${accent}16` }}
                   >
                     {creatingItem ? "Agregando…" : "Agregar"}
@@ -768,9 +841,7 @@ export default function AdminMenuPage() {
                                 </span>
                               </div>
 
-                              {it.description ? (
-                                <div className="text-xs text-white/55 mt-1 line-clamp-2">{it.description}</div>
-                              ) : null}
+                              {it.description ? <div className="text-xs text-white/55 mt-1 line-clamp-2">{it.description}</div> : null}
                             </div>
                           </div>
 

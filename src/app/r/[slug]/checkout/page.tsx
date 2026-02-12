@@ -63,6 +63,36 @@ function statusPill(isOpen: boolean) {
     : { label: "Cerrado", icon: "🔴", border: "rgba(239,68,68,0.30)", bg: "rgba(239,68,68,0.12)" };
 }
 
+/** ✅ Prefijo WhatsApp MX */
+const MX_WA_PREFIX_UI = "+52 1 ";
+
+function enforceMxPrefixUI(v: string) {
+  const raw = (v || "").trim();
+
+  // deja +, dígitos y espacios
+  const cleaned = raw.replace(/[^\d+ ]/g, "");
+
+  // dígitos completos para normalizar
+  let digits = cleaned.replace(/[^\d]/g, "");
+
+  // si el usuario pegó 52..., 521..., o +52 1..., quitamos prefijos
+  digits = digits.replace(/^52/, "");
+  digits = digits.replace(/^1/, "");
+
+  // limitar a 10 dígitos (MX)
+  digits = digits.slice(0, 10);
+
+  return MX_WA_PREFIX_UI + digits;
+}
+
+// Para guardar siempre bien en DB (WhatsApp MX): +521XXXXXXXXXX
+function toMxWhatsAppE164(uiPhone: string) {
+  const digits = (uiPhone || "").replace(/[^\d]/g, "");
+  let local = digits.replace(/^52/, "").replace(/^1/, "");
+  local = local.slice(0, 10);
+  return local ? `+521${local}` : "";
+}
+
 /**
  * ✅ IMPORTANTE:
  * Field debe estar FUERA de CheckoutPage, para que NO se remonte en cada render.
@@ -87,6 +117,8 @@ function Field({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={required ? `${placeholder} *` : placeholder}
+      inputMode={type === "tel" ? "tel" : undefined}
+      autoComplete={type === "tel" ? "tel" : undefined}
       className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none placeholder:text-white/35 focus:border-white/20"
     />
   );
@@ -105,7 +137,7 @@ export default function CheckoutPage() {
 
   // datos cliente
   const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
+  const [phone, setPhone] = useState(MX_WA_PREFIX_UI);
 
   // dirección
   const [street, setStreet] = useState("");
@@ -167,7 +199,10 @@ export default function CheckoutPage() {
     if (!restaurant) return;
     if (!canOrder) return;
     if (cart.items.length === 0) return;
-    if (!name.trim() || !phone.trim()) return;
+    if (!name.trim()) return;
+
+    const phoneE164 = toMxWhatsAppE164(phone);
+    if (!phoneE164) return;
 
     if (deliveryType === "delivery") {
       if (!street.trim() || !neighborhood.trim()) return;
@@ -195,7 +230,7 @@ export default function CheckoutPage() {
     const { data, error } = await supabase.rpc("create_order", {
       p_restaurant_slug: slug,
       p_customer_name: name.trim(),
-      p_customer_phone: phone.trim(),
+      p_customer_phone: phoneE164, // ✅ SIEMPRE +521XXXXXXXXXX
       p_delivery_type: deliveryType,
       p_address: address,
       p_payment_method: "cash",
@@ -304,9 +339,7 @@ export default function CheckoutPage() {
         {restaurant && !canOrder ? (
           <div className="px-5 pb-4">
             <div className="mx-auto max-w-4xl rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="font-medium">
-                {restaurant.is_active ? "Restaurante cerrado" : "Restaurante no disponible"}
-              </div>
+              <div className="font-medium">{restaurant.is_active ? "Restaurante cerrado" : "Restaurante no disponible"}</div>
               <div className="text-sm text-white/70 mt-1">{open.reason}</div>
             </div>
           </div>
@@ -386,16 +419,10 @@ export default function CheckoutPage() {
                   type="button"
                   className={[
                     "rounded-2xl border px-4 py-3 text-sm transition",
-                    deliveryType === "delivery"
-                      ? "border-white/20 bg-white/10"
-                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                    deliveryType === "delivery" ? "border-white/20 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
                   ].join(" ")}
                   onClick={() => setDeliveryType("delivery")}
-                  style={
-                    deliveryType === "delivery"
-                      ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` }
-                      : undefined
-                  }
+                  style={deliveryType === "delivery" ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` } : undefined}
                 >
                   Entrega
                 </button>
@@ -403,23 +430,25 @@ export default function CheckoutPage() {
                   type="button"
                   className={[
                     "rounded-2xl border px-4 py-3 text-sm transition",
-                    deliveryType === "pickup"
-                      ? "border-white/20 bg-white/10"
-                      : "border-white/10 bg-white/5 hover:bg-white/10",
+                    deliveryType === "pickup" ? "border-white/20 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
                   ].join(" ")}
                   onClick={() => setDeliveryType("pickup")}
-                  style={
-                    deliveryType === "pickup"
-                      ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` }
-                      : undefined
-                  }
+                  style={deliveryType === "pickup" ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` } : undefined}
                 >
                   Recoger
                 </button>
               </div>
 
               <Field value={name} onChange={setName} placeholder="Tu nombre" required />
-              <Field value={phone} onChange={setPhone} placeholder="Teléfono" required type="tel" />
+
+              {/* ✅ Teléfono con prefijo +52 1 fijo */}
+              <Field
+                value={phone}
+                onChange={(v) => setPhone(enforceMxPrefixUI(v))}
+                placeholder="Teléfono"
+                required
+                type="tel"
+              />
 
               {deliveryType === "delivery" ? (
                 <>
@@ -508,13 +537,13 @@ export default function CheckoutPage() {
                 </Link>
               </div>
 
-              <div className="mt-4 text-xs text-white/45">Tip: pide un teléfono válido para contactar al cliente rápido.</div>
+              
             </section>
 
             <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
               <div className="text-sm font-semibold">Seguridad</div>
               <div className="text-xs text-white/60 mt-2">
-                Este pedido se guarda directamente en el sistema del restaurante. El pago es en efectivo (por ahora).
+                Este pedido se guarda directamente en el sistema del restaurante.
               </div>
             </section>
           </aside>
