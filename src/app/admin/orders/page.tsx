@@ -5,7 +5,13 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 import { useOrderSound } from "@/components/admin/useOrderSound";
 
-type Restaurant = { id: string; name: string; slug: string };
+type Restaurant = {
+  id: string;
+  name: string;
+  slug: string;
+  accent_color?: string | null;
+  brand_icon?: string | null;
+};
 
 type OrderItem = {
   id: string;
@@ -59,35 +65,6 @@ function normalize(s: string) {
   return (s || "").toLowerCase().trim();
 }
 
-function StatusPill({ status }: { status: string }) {
-  const label = (STATUS_LABEL as any)[status] ?? status;
-
-  const styles =
-    status === "pending"
-      ? "bg-yellow-500/15 text-yellow-300 border-yellow-500/35"
-      : status === "preparing"
-      ? "bg-blue-500/15 text-blue-300 border-blue-500/35"
-      : status === "on_the_way"
-      ? "bg-purple-500/15 text-purple-300 border-purple-500/35"
-      : status === "delivered"
-      ? "bg-green-500/15 text-green-300 border-green-500/35"
-      : status === "cancelled"
-      ? "bg-red-500/15 text-red-300 border-red-500/35"
-      : "bg-white/5 text-white border-white/15";
-
-  return (
-    <span
-      className={[
-        "inline-flex items-center px-2.5 py-1 rounded-full border text-xs font-medium",
-        "transition-all duration-200 ease-out animate-status-pop",
-        styles,
-      ].join(" ")}
-    >
-      {label}
-    </span>
-  );
-}
-
 type Toast = { id: string; title: string; body?: string; tone?: "normal" | "success" | "danger" };
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -103,6 +80,40 @@ type ConfirmState =
       danger?: boolean;
       onConfirm: () => Promise<void> | void;
     };
+
+function deriveAccent(r?: Restaurant | null) {
+  return r?.accent_color || "#ff3b30";
+}
+
+function StatusPill({ status, accent }: { status: string; accent: string }) {
+  const label = (STATUS_LABEL as any)[status] ?? status;
+
+  // Paletas suaves pero consistentes. El "pending" toma el accent.
+  const styles =
+    status === "pending"
+      ? { border: `${accent}55`, bg: `${accent}16`, text: "rgba(255,255,255,0.90)" }
+      : status === "preparing"
+      ? { border: "rgba(59,130,246,0.45)", bg: "rgba(59,130,246,0.14)", text: "rgba(255,255,255,0.90)" }
+      : status === "on_the_way"
+      ? { border: "rgba(168,85,247,0.45)", bg: "rgba(168,85,247,0.14)", text: "rgba(255,255,255,0.90)" }
+      : status === "delivered"
+      ? { border: "rgba(34,197,94,0.45)", bg: "rgba(34,197,94,0.14)", text: "rgba(255,255,255,0.90)" }
+      : status === "cancelled"
+      ? { border: "rgba(239,68,68,0.45)", bg: "rgba(239,68,68,0.14)", text: "rgba(255,255,255,0.90)" }
+      : { border: "rgba(255,255,255,0.16)", bg: "rgba(255,255,255,0.06)", text: "rgba(255,255,255,0.85)" };
+
+  return (
+    <span
+      className={[
+        "inline-flex items-center gap-2 px-2.5 py-1 rounded-full border text-xs font-medium",
+        "transition-all duration-200 ease-out animate-status-pop",
+      ].join(" ")}
+      style={{ borderColor: styles.border, backgroundColor: styles.bg, color: styles.text }}
+    >
+      {label}
+    </span>
+  );
+}
 
 export default function AdminOrders() {
   const router = useRouter();
@@ -159,7 +170,7 @@ export default function AdminOrders() {
 
     const { data: r, error: rErr } = await supabase
       .from("restaurants")
-      .select("id,name,slug")
+      .select("id,name,slug,accent_color,brand_icon")
       .eq("owner_id", auth.user.id)
       .single();
 
@@ -399,7 +410,6 @@ export default function AdminOrders() {
   }
 
   async function hardDeleteOrder(o: Order) {
-    // RPC: delete_order_hard(uuid)
     setSavingMap((m) => ({ ...m, [o.id]: true }));
     const { error } = await supabase.rpc("delete_order_hard", { p_order_id: o.id });
     setSavingMap((m) => ({ ...m, [o.id]: false }));
@@ -412,34 +422,39 @@ export default function AdminOrders() {
     if (restaurant) await loadAll(restaurant);
   }
 
-  async function purgeArchived(days: number) {
-    setLoading(true);
-    const { error } = await supabase.rpc("purge_archived_orders", { p_days: days });
-    setLoading(false);
-
-    if (error) {
-      pushToast("No se pudo purgar", error.message, "danger");
-      return;
-    }
-    pushToast("Limpieza completada", `Se borraron archivados de más de ${days} días`, "success");
-    if (restaurant) await loadAll(restaurant);
-  }
-
   async function logout() {
     await supabase.auth.signOut();
     router.push("/admin/login");
   }
 
+  const accent = deriveAccent(restaurant);
+
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen bg-black text-white overflow-x-hidden" style={{ overflowX: "clip" as any }}>
+      {/* Fondo (igual filosofía que MenuClient) */}
+      <div
+        className="pointer-events-none fixed inset-0 opacity-60"
+        style={{
+          background:
+            `radial-gradient(1200px 600px at 20% 10%, ${accent}22 0%, transparent 60%),` +
+            `radial-gradient(900px 500px at 80% 20%, #ff950022 0%, transparent 55%),` +
+            `radial-gradient(700px 450px at 40% 90%, #ffcc0020 0%, transparent 55%)`,
+        }}
+      />
+
       {/* ✅ Toasts */}
       <div className="fixed top-4 right-4 z-[9999] space-y-2">
         {toasts.map((t) => (
           <div
             key={t.id}
             className={[
-              "w-[340px] rounded-2xl border bg-black/80 backdrop-blur-xl p-4 shadow-[0_24px_70px_rgba(0,0,0,0.55)]",
-              t.tone === "success" ? "border-emerald-500/25" : t.tone === "danger" ? "border-red-500/25" : "border-white/10",
+              "w-[340px] rounded-2xl border bg-black/80 backdrop-blur-xl p-4",
+              "shadow-[0_24px_70px_rgba(0,0,0,0.55)]",
+              t.tone === "success"
+                ? "border-emerald-500/25"
+                : t.tone === "danger"
+                ? "border-red-500/25"
+                : "border-white/10",
             ].join(" ")}
           >
             <div className="font-semibold">{t.title}</div>
@@ -481,28 +496,55 @@ export default function AdminOrders() {
         </div>
       ) : null}
 
-      <div className="sticky top-0 z-20 bg-black/80 backdrop-blur-xl border-b border-white/10">
-        <div className="max-w-4xl mx-auto px-5 py-4 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Pedidos</h1>
-            <p className="text-xs text-white/60">{restaurant ? restaurant.name : "Cargando..."}</p>
+      {/* Header sticky (glass + pills) */}
+      <header className="sticky top-0 z-20 border-b border-white/10 bg-black/70 backdrop-blur-xl">
+        <div className="mx-auto max-w-5xl px-5 py-4 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <div
+                className="h-10 w-10 rounded-2xl border border-white/10 bg-white/5 flex items-center justify-center text-xl shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
+                style={{
+                  boxShadow: `0 12px 36px ${accent}20`,
+                  borderColor: `${accent}45`,
+                  backgroundColor: `${accent}12`,
+                }}
+                title="Panel Admin"
+              >
+                {restaurant?.brand_icon || "🧾"}
+              </div>
 
-            {restaurant?.slug ? (
-              <p className="text-xs text-white/50 mt-1">
-                Link público: <span className="font-mono">/r/{restaurant.slug}</span>
-              </p>
-            ) : null}
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                  <h1 className="text-lg sm:text-xl font-semibold tracking-tight truncate">Pedidos</h1>
+
+                  <span
+                    className="inline-flex items-center gap-2 text-[11px] px-2.5 py-1 rounded-full border"
+                    style={{ borderColor: `${accent}40`, backgroundColor: `${accent}14`, color: "rgba(255,255,255,0.88)" }}
+                  >
+                    <span className="text-[10px]">⚡</span>
+                    <span className="font-medium">{showArchived ? "Archivados" : "Activos"}</span>
+                  </span>
+
+                  {restaurant?.slug ? (
+                    <span className="hidden sm:inline-flex text-[11px] px-2 py-0.5 rounded-full border border-white/10 bg-white/5 text-white/70">
+                      /r/{restaurant.slug}
+                    </span>
+                  ) : null}
+                </div>
+
+                <p className="text-xs text-white/60 truncate">{restaurant ? restaurant.name : "Cargando..."}</p>
+              </div>
+            </div>
           </div>
 
           <div className="flex gap-2 items-center flex-wrap justify-end">
-            <label className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/15 bg-white/5 text-sm select-none">
+            <label className="flex items-center gap-2 px-4 py-2 rounded-full border border-white/12 bg-white/5 text-sm select-none">
               <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
               Archivados
             </label>
 
-            {/* ✅ Botón sonido */}
             <button
-              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
               onClick={async () => {
                 if (!sound.enabled) {
                   const ok = await sound.unlock();
@@ -517,46 +559,32 @@ export default function AdminOrders() {
                   pushToast("🔕 Sonido desactivado");
                 }
               }}
+              style={{ borderColor: `${accent}35` }}
             >
               {sound.enabled ? "🔔 Sonido ON" : "🔕 Activar sonido"}
             </button>
 
-            {/* ✅ NUEVO: Menú (productos/categorías) */}
             <button
-              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
               onClick={() => router.push("/admin/menu")}
               disabled={!restaurant}
               title="Editar productos y categorías"
+              style={{ borderColor: `${accent}35` }}
             >
               Menú
             </button>
 
-            {/* ✅ Limpieza (purgar) */}
             <button
-              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
-              onClick={() =>
-                setConfirm({
-                  title: "Borrar archivados antiguos",
-                  body: "Esto eliminará DEFINITIVAMENTE pedidos archivados viejos (y sus productos). Recomendado para ahorrar almacenamiento.",
-                  confirmText: "Purgar 30 días",
-                  danger: true,
-                  onConfirm: async () => purgeArchived(30),
-                })
-              }
-            >
-              Limpiar
-            </button>
-
-            <button
-              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
               onClick={() => router.push("/admin/settings")}
               disabled={!restaurant}
+              style={{ borderColor: `${accent}35` }}
             >
               Ajustes
             </button>
 
             <button
-              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
               onClick={logout}
             >
               Salir
@@ -565,14 +593,14 @@ export default function AdminOrders() {
         </div>
 
         {/* Search */}
-        <div className="max-w-4xl mx-auto px-5 pb-3">
+        <div className="mx-auto max-w-5xl px-5 pb-3">
           <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 flex items-center gap-3">
             <div className="text-white/50 text-sm">🔎</div>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar por folio, nombre, teléfono o producto..."
-              className="w-full bg-transparent outline-none text-sm"
+              className="w-full bg-transparent outline-none text-sm placeholder:text-white/35"
             />
             {search ? (
               <button
@@ -585,24 +613,44 @@ export default function AdminOrders() {
           </div>
         </div>
 
-        {/* Status filters */}
-        <div className="max-w-4xl mx-auto px-5 pb-4 flex gap-2 overflow-x-auto no-scrollbar">
-          {["all", ...STATUS_KEYS].map((k) => (
-            <button
-              key={k}
-              onClick={() => setFilter(k)}
-              className={[
-                "px-4 py-2 rounded-full border text-sm whitespace-nowrap transition",
-                filter === k ? "border-white/20 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
-              ].join(" ")}
-            >
-              {statusLabel(k)}
-            </button>
-          ))}
+        {/* Status filters (con snap + touch horizontal como MenuClient) */}
+        <div className="px-5 pb-4">
+          <div
+            className={[
+              "mx-auto max-w-5xl flex gap-2 overflow-x-auto no-scrollbar",
+              "select-none snap-x snap-mandatory overscroll-x-contain overscroll-y-none touch-pan-x",
+            ].join(" ")}
+            style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-x" }}
+          >
+            {["all", ...STATUS_KEYS].map((k) => {
+              const active = filter === k;
+              return (
+                <button
+                  key={k}
+                  onClick={() => setFilter(k)}
+                  className={[
+                    "relative px-4 py-2 rounded-full border text-sm whitespace-nowrap transition",
+                    "snap-start",
+                    active ? "bg-white/10 border-white/15" : "bg-white/5 border-white/10 hover:bg-white/10",
+                  ].join(" ")}
+                  style={active ? { borderColor: `${accent}50`, backgroundColor: `${accent}14` } : undefined}
+                >
+                  {statusLabel(k)}
+                  {active ? (
+                    <span
+                      className="absolute -bottom-[6px] left-1/2 -translate-x-1/2 h-[3px] w-10 rounded-full"
+                      style={{ backgroundColor: accent }}
+                    />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      </header>
 
-      <div className="max-w-4xl mx-auto px-5 py-6 space-y-4">
+      {/* Body */}
+      <main className="relative mx-auto max-w-5xl px-5 py-6 space-y-4">
         {loading ? (
           <div className="rounded-3xl border border-white/10 bg-white/5 p-5 text-white/70">Cargando pedidos...</div>
         ) : filtered.length === 0 ? (
@@ -615,25 +663,34 @@ export default function AdminOrders() {
           const hasToken = !!o.public_tracking_token;
 
           return (
-            <div key={o.id} className="rounded-3xl border border-white/10 bg-white/5 p-5">
+            <div
+              key={o.id}
+              className="rounded-3xl border bg-white/5 p-5 transition border-white/10 hover:bg-white/8 hover:border-white/15"
+              style={{ boxShadow: `0 24px 60px rgba(0,0,0,0.45)` }}
+            >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <div className="font-semibold">Folio #{o.folio}</div>
-                    <StatusPill status={o.status} />
+                    <StatusPill status={o.status} accent={accent} />
                     {savingMap[o.id] ? <span className="text-xs text-white/60">Guardando...</span> : null}
                     {showArchived && o.archived_at ? (
                       <span className="text-xs text-white/50">Archivado: {new Date(o.archived_at).toLocaleString()}</span>
                     ) : null}
+
+                    <span
+                      className="text-[11px] px-2 py-0.5 rounded-full border border-white/10 bg-white/5 text-white/70"
+                      style={{ borderColor: `${accent}25`, backgroundColor: `${accent}10` }}
+                    >
+                      {o.delivery_type === "delivery" ? "Entrega" : "Pickup"}
+                    </span>
                   </div>
 
                   <div className="text-sm text-white/70 mt-1">
                     {o.customer_name} · {o.customer_phone}
                   </div>
 
-                  <div className="text-sm text-white/70 mt-1">
-                    {o.delivery_type === "delivery" ? "Entrega a domicilio" : "Recoger"} · {formatAddress(o)}
-                  </div>
+                  <div className="text-sm text-white/70 mt-1">{formatAddress(o)}</div>
 
                   {o.notes ? (
                     <div className="text-sm text-white/70 mt-2">
@@ -650,14 +707,16 @@ export default function AdminOrders() {
                 <div className="mt-4 flex gap-2 flex-wrap">
                   <button
                     onClick={() => copyTracking(o)}
-                    className="px-4 py-2 rounded-full border text-sm transition border-white/15 bg-white/10 hover:bg-white/15"
+                    className="px-4 py-2 rounded-full border text-sm transition border-white/12 bg-white/10 hover:bg-white/15"
+                    style={{ borderColor: `${accent}35` }}
                   >
                     {copiedId === o.id ? "✅ Copiado" : "Copiar tracking"}
                   </button>
 
                   <button
                     onClick={() => openWhatsApp(o)}
-                    className="px-4 py-2 rounded-full border text-sm transition border-emerald-500/25 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
+                    className="px-4 py-2 rounded-full border text-sm transition"
+                    style={{ borderColor: "rgba(34,197,94,0.30)", backgroundColor: "rgba(34,197,94,0.14)", color: "rgba(255,255,255,0.90)" }}
                   >
                     WhatsApp cliente
                   </button>
@@ -708,7 +767,9 @@ export default function AdminOrders() {
                       </div>
                       <div className="flex items-center justify-between text-white/70">
                         <span>Envío</span>
-                        <span className="text-white/90 font-medium">{money(o.delivery_type === "delivery" ? o.delivery_fee : 0)}</span>
+                        <span className="text-white/90 font-medium">
+                          {money(o.delivery_type === "delivery" ? o.delivery_fee : 0)}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-white/80">Total</span>
@@ -732,16 +793,17 @@ export default function AdminOrders() {
                           onClick={() => setStatus(o.id, s)}
                           className={[
                             "px-4 py-2 rounded-full border text-sm transition",
-                            active ? "border-white/20 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
+                            active ? "bg-white/10 border-white/15" : "bg-white/5 border-white/10 hover:bg-white/10",
                             savingMap[o.id] ? "opacity-60 cursor-not-allowed" : "",
                           ].join(" ")}
+                          style={active ? { borderColor: `${accent}50`, backgroundColor: `${accent}14` } : undefined}
                         >
                           {STATUS_LABEL[s]}
                         </button>
                       );
                     })}
 
-                    {(o.status === "delivered" || o.status === "cancelled") ? (
+                    {o.status === "delivered" || o.status === "cancelled" ? (
                       <button
                         disabled={!!savingMap[o.id]}
                         onClick={() =>
@@ -752,7 +814,8 @@ export default function AdminOrders() {
                             onConfirm: async () => archiveOrder(o),
                           })
                         }
-                        className="px-4 py-2 rounded-full border text-sm transition border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15 disabled:opacity-60"
+                        className="px-4 py-2 rounded-full border text-sm transition disabled:opacity-60"
+                        style={{ borderColor: "rgba(239,68,68,0.30)", backgroundColor: "rgba(239,68,68,0.14)", color: "rgba(255,255,255,0.90)" }}
                       >
                         Archivar
                       </button>
@@ -770,7 +833,8 @@ export default function AdminOrders() {
                           onConfirm: async () => restoreOrder(o),
                         })
                       }
-                      className="px-4 py-2 rounded-full border text-sm transition border-white/15 bg-white/10 hover:bg-white/15 disabled:opacity-60"
+                      className="px-4 py-2 rounded-full border text-sm transition border-white/12 bg-white/10 hover:bg-white/15 disabled:opacity-60"
+                      style={{ borderColor: `${accent}35` }}
                     >
                       Restaurar
                     </button>
@@ -786,17 +850,23 @@ export default function AdminOrders() {
                           onConfirm: async () => hardDeleteOrder(o),
                         })
                       }
-                      className="px-4 py-2 rounded-full border text-sm transition border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15 disabled:opacity-60"
+                      className="px-4 py-2 rounded-full border text-sm transition disabled:opacity-60"
+                      style={{ borderColor: "rgba(239,68,68,0.30)", backgroundColor: "rgba(239,68,68,0.14)", color: "rgba(255,255,255,0.90)" }}
                     >
                       Borrar definitivo
                     </button>
                   </>
                 )}
               </div>
+
+              <div
+                className="pointer-events-none mt-4 h-[1px] w-full opacity-0 group-hover:opacity-100 transition"
+                style={{ background: `linear-gradient(90deg, transparent, ${accent}55, transparent)` }}
+              />
             </div>
           );
         })}
-      </div>
+      </main>
 
       <style>{`
         @keyframes statusPop {

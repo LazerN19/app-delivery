@@ -308,7 +308,7 @@ export default function TrackingClient({ initial }: { initial: Order }) {
             })}
           </div>
 
-          <div className="text-xs text-white/45 mt-4">Se actualiza automáticamente (realtime + cada 5s).</div>
+          <div className="text-xs text-white/45 mt-4">Se actualiza automáticamente.</div>
         </section>
 
         {/* Productos */}

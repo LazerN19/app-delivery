@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 
-type Restaurant = { id: string; name: string; slug: string };
+type Restaurant = { id: string; name: string; slug: string; accent_color?: string | null; brand_icon?: string | null };
 
 type Category = {
   id: string;
@@ -31,6 +31,10 @@ function money(n: number) {
 
 function normalize(s: string) {
   return (s || "").toLowerCase().trim();
+}
+
+function deriveAccent(r?: Restaurant | null) {
+  return r?.accent_color || "#ff3b30";
 }
 
 async function uploadToRestaurantAssets(restaurantId: string, file: File) {
@@ -78,7 +82,7 @@ export default function AdminMenuPage() {
   const [editingCatName, setEditingCatName] = useState("");
   const [savingCat, setSavingCat] = useState(false);
 
-  // Edit item (drawer/modal simple)
+  // Edit item (drawer)
   const [editOpen, setEditOpen] = useState(false);
   const [editItem, setEditItem] = useState<MenuItem | null>(null);
   const [editName, setEditName] = useState("");
@@ -97,7 +101,7 @@ export default function AdminMenuPage() {
 
     const { data: r, error } = await supabase
       .from("restaurants")
-      .select("id,name,slug")
+      .select("id,name,slug,accent_color,brand_icon")
       .eq("owner_id", auth.user.id)
       .single();
 
@@ -129,7 +133,6 @@ export default function AdminMenuPage() {
     const { data: it, error: itErr } = await supabase
       .from("menu_items")
       .select("id,name,description,price,image_url,category_id,sort_order,is_active")
-
       .eq("restaurant_id", rr.id)
       .order("sort_order", { ascending: true });
 
@@ -144,6 +147,8 @@ export default function AdminMenuPage() {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const accent = deriveAccent(restaurant);
 
   const catsSorted = useMemo(() => {
     const arr = [...categories];
@@ -160,7 +165,6 @@ export default function AdminMenuPage() {
     }
 
     if (!q) return base;
-
     return base.filter((x) => normalize(`${x.name} ${x.description || ""}`).includes(q));
   }, [items, search, catFilter]);
 
@@ -221,7 +225,6 @@ export default function AdminMenuPage() {
     );
     if (!ok) return;
 
-    // 1) desvincular items
     const { error: upErr } = await supabase
       .from("menu_items")
       .update({ category_id: null })
@@ -230,13 +233,7 @@ export default function AdminMenuPage() {
 
     if (upErr) return alert(upErr.message);
 
-    // 2) borrar categoría
-    const { error } = await supabase
-      .from("categories")
-      .delete()
-      .eq("id", cat.id)
-      .eq("restaurant_id", restaurant.id);
-
+    const { error } = await supabase.from("categories").delete().eq("id", cat.id).eq("restaurant_id", restaurant.id);
     if (error) return alert(error.message);
 
     if (catFilter === cat.id) setCatFilter("__all__");
@@ -336,11 +333,7 @@ export default function AdminMenuPage() {
       image_url,
     };
 
-    const { error } = await supabase
-      .from("menu_items")
-      .update(payload)
-      .eq("id", editItem.id)
-      .eq("restaurant_id", restaurant.id);
+    const { error } = await supabase.from("menu_items").update(payload).eq("id", editItem.id).eq("restaurant_id", restaurant.id);
 
     setSavingItem(false);
     if (error) return alert(error.message);
@@ -355,12 +348,7 @@ export default function AdminMenuPage() {
     const ok = confirm(`¿Eliminar producto "${it.name}"?`);
     if (!ok) return;
 
-    const { error } = await supabase
-      .from("menu_items")
-      .delete()
-      .eq("id", it.id)
-      .eq("restaurant_id", restaurant.id);
-
+    const { error } = await supabase.from("menu_items").delete().eq("id", it.id).eq("restaurant_id", restaurant.id);
     if (error) return alert(error.message);
     await loadAll(restaurant);
   }
@@ -386,40 +374,90 @@ export default function AdminMenuPage() {
 
   const publicLink = restaurant?.slug ? `/r/${restaurant.slug}` : "";
 
+  // Tabs estilo MenuClient: Todas + Sin categoría + categorías
+  const tabs = useMemo(() => {
+    return [
+      { id: "__all__", name: "Todo" },
+      { id: "__uncat__", name: "Sin categoría" },
+      ...catsSorted.map((c) => ({ id: c.id, name: c.name })),
+    ];
+  }, [catsSorted]);
+
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen bg-black text-white overflow-x-hidden" style={{ overflowX: "clip" as any }}>
+      {/* Fondo */}
+      <div
+        className="pointer-events-none fixed inset-0 opacity-60"
+        style={{
+          background:
+            `radial-gradient(1200px 600px at 20% 10%, ${accent}22 0%, transparent 60%),` +
+            `radial-gradient(900px 500px at 80% 20%, #ff950022 0%, transparent 55%),` +
+            `radial-gradient(700px 450px at 40% 90%, #ffcc0020 0%, transparent 55%)`,
+        }}
+      />
+
       {/* Header */}
-      <div className="sticky top-0 z-20 bg-black/80 backdrop-blur-xl border-b border-white/10">
-        <div className="max-w-6xl mx-auto px-6 py-5 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Menú</h1>
-            <p className="text-sm text-white/60">Crea, edita y elimina categorías y productos.</p>
-            {publicLink ? (
-              <p className="text-xs text-white/45 mt-2">
-                Link público: <span className="font-mono">{publicLink}</span>
-              </p>
-            ) : null}
+      <header className="sticky top-0 z-20 border-b border-white/10 bg-black/70 backdrop-blur-xl">
+        <div className="mx-auto max-w-5xl px-5 py-4 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <div
+                className="h-10 w-10 rounded-2xl border border-white/10 bg-white/5 flex items-center justify-center text-xl shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
+                style={{
+                  boxShadow: `0 12px 36px ${accent}20`,
+                  borderColor: `${accent}45`,
+                  backgroundColor: `${accent}12`,
+                }}
+                title="Panel Menú"
+              >
+                {restaurant?.brand_icon || "🍽️"}
+              </div>
+
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                  <h1 className="text-lg sm:text-xl font-semibold tracking-tight truncate">Menú</h1>
+
+                  <span
+                    className="inline-flex items-center gap-2 text-[11px] px-2.5 py-1 rounded-full border"
+                    style={{ borderColor: `${accent}40`, backgroundColor: `${accent}14`, color: "rgba(255,255,255,0.88)" }}
+                  >
+                    <span className="text-[10px]">🧩</span>
+                    <span className="font-medium">Catálogo</span>
+                  </span>
+
+                  {publicLink ? (
+                    <span className="hidden sm:inline-flex text-[11px] px-2 py-0.5 rounded-full border border-white/10 bg-white/5 text-white/70">
+                      {publicLink}
+                    </span>
+                  ) : null}
+                </div>
+
+                <p className="text-xs text-white/60 truncate">{restaurant ? restaurant.name : "Cargando..."}</p>
+              </div>
+            </div>
           </div>
 
           <div className="flex gap-2 items-center flex-wrap justify-end">
             <button
-              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
               onClick={() => router.push("/admin/orders")}
               disabled={!restaurant}
+              style={{ borderColor: `${accent}35` }}
             >
               Pedidos
             </button>
 
             <button
-              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
               onClick={() => router.push("/admin/settings")}
               disabled={!restaurant}
+              style={{ borderColor: `${accent}35` }}
             >
               Ajustes
             </button>
 
             <button
-              className="px-4 py-2 rounded-full border border-white/15 bg-white/5 hover:bg-white/10 transition text-sm"
+              className="px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition text-sm"
               onClick={logout}
             >
               Salir
@@ -427,9 +465,9 @@ export default function AdminMenuPage() {
           </div>
         </div>
 
-        {/* Search + filter */}
-        <div className="max-w-6xl mx-auto px-6 pb-5 flex flex-col md:flex-row gap-3">
-          <div className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 flex items-center gap-3">
+        {/* Search */}
+        <div className="mx-auto max-w-5xl px-5 pb-3">
+          <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 flex items-center gap-3">
             <div className="text-white/50 text-sm">🔎</div>
             <input
               value={search}
@@ -446,36 +484,67 @@ export default function AdminMenuPage() {
               </button>
             ) : null}
           </div>
-
-          <select
-            value={catFilter}
-            onChange={(e) => setCatFilter(e.target.value)}
-            className="md:w-[320px] rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
-          >
-            <option value="__all__">Todas las categorías</option>
-            <option value="__uncat__">Sin categoría</option>
-            {catsSorted.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
         </div>
-      </div>
 
-      <div className="max-w-6xl mx-auto px-6 py-6">
+        {/* Tabs (reemplaza el select para look tipo MenuClient) */}
+        <div className="px-5 pb-4">
+          <div
+            className={[
+              "mx-auto max-w-5xl flex gap-2 overflow-x-auto no-scrollbar",
+              "select-none snap-x snap-mandatory",
+              "overscroll-x-contain overscroll-y-none",
+              "touch-pan-x",
+            ].join(" ")}
+            style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-x" }}
+          >
+            {tabs.map((t) => {
+              const active = t.id === catFilter;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setCatFilter(t.id)}
+                  className={[
+                    "relative px-4 py-2 rounded-full border text-sm whitespace-nowrap transition",
+                    "snap-start",
+                    active ? "bg-white/10 border-white/15" : "bg-white/5 border-white/10 hover:bg-white/10",
+                  ].join(" ")}
+                  style={active ? { borderColor: `${accent}50`, backgroundColor: `${accent}14` } : undefined}
+                >
+                  {t.name}
+                  {active ? (
+                    <span
+                      className="absolute -bottom-[6px] left-1/2 -translate-x-1/2 h-[3px] w-10 rounded-full"
+                      style={{ backgroundColor: accent }}
+                    />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </header>
+
+      <main className="relative mx-auto max-w-5xl px-5 py-6">
         {loading ? (
           <div className="rounded-3xl border border-white/10 bg-white/5 p-6 text-white/70">Cargando…</div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* LEFT: Categorías */}
-            <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
+            <section
+              className="rounded-3xl border bg-white/5 p-5 transition border-white/10 hover:bg-white/8 hover:border-white/15"
+              style={{ boxShadow: `0 24px 60px rgba(0,0,0,0.45)` }}
+            >
               <div className="flex items-end justify-between">
                 <div>
                   <h2 className="text-lg font-semibold">Categorías</h2>
                   <p className="text-xs text-white/55">Edita o elimina categorías.</p>
                 </div>
-                <div className="text-xs text-white/45">{categories.length} total</div>
+                <div
+                  className="text-[11px] px-2 py-0.5 rounded-full border border-white/10 bg-white/5 text-white/70"
+                  style={{ borderColor: `${accent}25`, backgroundColor: `${accent}10` }}
+                >
+                  {categories.length} total
+                </div>
               </div>
 
               <div className="mt-4 flex gap-2">
@@ -483,12 +552,13 @@ export default function AdminMenuPage() {
                   value={newCatName}
                   onChange={(e) => setNewCatName(e.target.value)}
                   placeholder="Ej: Sushi"
-                  className="flex-1 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
+                  className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/35"
                 />
                 <button
                   onClick={createCategory}
                   disabled={creatingCat}
-                  className="px-5 py-3 rounded-2xl border border-white/10 bg-white/10 hover:bg-white/15 transition text-sm font-medium disabled:opacity-60"
+                  className="px-5 py-3 rounded-2xl border text-sm font-medium transition disabled:opacity-60"
+                  style={{ borderColor: `${accent}45`, backgroundColor: `${accent}16` }}
                 >
                   {creatingCat ? "Agregando…" : "Agregar"}
                 </button>
@@ -512,7 +582,7 @@ export default function AdminMenuPage() {
                               <input
                                 value={editingCatName}
                                 onChange={(e) => setEditingCatName(e.target.value)}
-                                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-2 text-sm outline-none"
+                                className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm outline-none placeholder:text-white/35"
                               />
                             ) : (
                               <div className="font-semibold truncate">{c.name}</div>
@@ -523,12 +593,12 @@ export default function AdminMenuPage() {
                           <div className="flex gap-2 items-center flex-wrap justify-end">
                             <button
                               onClick={() => toggleCategoryActive(c)}
-                              className={[
-                                "px-3 py-2 rounded-full border text-xs transition",
+                              className="px-3 py-2 rounded-full border text-xs transition"
+                              style={
                                 (c.is_active ?? true)
-                                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
-                                  : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10",
-                              ].join(" ")}
+                                  ? { borderColor: "rgba(34,197,94,0.30)", backgroundColor: "rgba(34,197,94,0.14)", color: "rgba(255,255,255,0.90)" }
+                                  : { borderColor: `${accent}25`, backgroundColor: `${accent}10`, color: "rgba(255,255,255,0.80)" }
+                              }
                             >
                               {(c.is_active ?? true) ? "Activa" : "Inactiva"}
                             </button>
@@ -538,7 +608,8 @@ export default function AdminMenuPage() {
                                 <button
                                   onClick={saveCategory}
                                   disabled={savingCat}
-                                  className="px-3 py-2 rounded-full border border-white/15 bg-white/10 hover:bg-white/15 transition text-xs disabled:opacity-60"
+                                  className="px-3 py-2 rounded-full border text-xs transition disabled:opacity-60"
+                                  style={{ borderColor: `${accent}45`, backgroundColor: `${accent}16` }}
                                 >
                                   {savingCat ? "Guardando…" : "Guardar"}
                                 </button>
@@ -562,7 +633,8 @@ export default function AdminMenuPage() {
                                 </button>
                                 <button
                                   onClick={() => deleteCategory(c)}
-                                  className="px-3 py-2 rounded-full border border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15 transition text-xs"
+                                  className="px-3 py-2 rounded-full border text-xs transition"
+                                  style={{ borderColor: "rgba(239,68,68,0.30)", backgroundColor: "rgba(239,68,68,0.14)", color: "rgba(255,255,255,0.90)" }}
                                 >
                                   Borrar
                                 </button>
@@ -578,13 +650,21 @@ export default function AdminMenuPage() {
             </section>
 
             {/* RIGHT: Productos */}
-            <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
+            <section
+              className="rounded-3xl border bg-white/5 p-5 transition border-white/10 hover:bg-white/8 hover:border-white/15"
+              style={{ boxShadow: `0 24px 60px rgba(0,0,0,0.45)` }}
+            >
               <div className="flex items-end justify-between">
                 <div>
                   <h2 className="text-lg font-semibold">Productos</h2>
                   <p className="text-xs text-white/55">Crea, edita y elimina productos.</p>
                 </div>
-                <div className="text-xs text-white/45">{items.length} total</div>
+                <div
+                  className="text-[11px] px-2 py-0.5 rounded-full border border-white/10 bg-white/5 text-white/70"
+                  style={{ borderColor: `${accent}25`, backgroundColor: `${accent}10` }}
+                >
+                  {items.length} total
+                </div>
               </div>
 
               {/* Create product form */}
@@ -593,14 +673,14 @@ export default function AdminMenuPage() {
                   value={newItemName}
                   onChange={(e) => setNewItemName(e.target.value)}
                   placeholder="Nombre (Ej: Roll California)"
-                  className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/35"
                 />
 
                 <textarea
                   value={newItemDesc}
                   onChange={(e) => setNewItemDesc(e.target.value)}
                   placeholder="Descripción (ej: 6pz, aguacate, surimi, pepino...)"
-                  className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none min-h-[84px]"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none min-h-[84px] placeholder:text-white/35"
                 />
 
                 <div className="flex gap-2 flex-col md:flex-row">
@@ -608,7 +688,7 @@ export default function AdminMenuPage() {
                     value={newItemPrice}
                     onChange={(e) => setNewItemPrice(e.target.value)}
                     placeholder="Precio (Ej: 120)"
-                    className="flex-1 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
+                    className="flex-1 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/35"
                   />
 
                   <select
@@ -627,7 +707,8 @@ export default function AdminMenuPage() {
                   <button
                     onClick={createItem}
                     disabled={creatingItem}
-                    className="px-6 py-3 rounded-2xl border border-white/10 bg-white/10 hover:bg-white/15 transition text-sm font-medium disabled:opacity-60"
+                    className="px-6 py-3 rounded-2xl border text-sm font-medium transition disabled:opacity-60"
+                    style={{ borderColor: `${accent}45`, backgroundColor: `${accent}16` }}
                   >
                     {creatingItem ? "Agregando…" : "Agregar"}
                   </button>
@@ -654,8 +735,7 @@ export default function AdminMenuPage() {
                   </div>
                 ) : (
                   filteredItems.map((it) => {
-                    const catName =
-                      it.category_id ? catsSorted.find((c) => c.id === it.category_id)?.name : "Sin categoría";
+                    const catName = it.category_id ? catsSorted.find((c) => c.id === it.category_id)?.name : "Sin categoría";
 
                     return (
                       <div key={it.id} className="rounded-3xl border border-white/10 bg-black/30 p-4">
@@ -679,6 +759,13 @@ export default function AdminMenuPage() {
                                   {catName ? `${catName} · ` : ""}
                                   {money(it.price)}
                                 </span>
+
+                                <span
+                                  className="text-[11px] px-2 py-0.5 rounded-full border border-white/10 bg-white/5 text-white/70"
+                                  style={{ borderColor: `${accent}25`, backgroundColor: `${accent}10` }}
+                                >
+                                  {(it.is_active ?? true) ? "Visible" : "Oculto"}
+                                </span>
                               </div>
 
                               {it.description ? (
@@ -690,12 +777,12 @@ export default function AdminMenuPage() {
                           <div className="flex gap-2 items-center flex-wrap justify-end">
                             <button
                               onClick={() => toggleItemActive(it)}
-                              className={[
-                                "px-3 py-2 rounded-full border text-xs transition",
+                              className="px-3 py-2 rounded-full border text-xs transition"
+                              style={
                                 (it.is_active ?? true)
-                                  ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
-                                  : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10",
-                              ].join(" ")}
+                                  ? { borderColor: "rgba(34,197,94,0.30)", backgroundColor: "rgba(34,197,94,0.14)", color: "rgba(255,255,255,0.90)" }
+                                  : { borderColor: `${accent}25`, backgroundColor: `${accent}10`, color: "rgba(255,255,255,0.80)" }
+                              }
                             >
                               {(it.is_active ?? true) ? "Activo" : "Inactivo"}
                             </button>
@@ -709,7 +796,8 @@ export default function AdminMenuPage() {
 
                             <button
                               onClick={() => deleteItem(it)}
-                              className="px-3 py-2 rounded-full border border-red-500/25 bg-red-500/10 text-red-200 hover:bg-red-500/15 transition text-xs"
+                              className="px-3 py-2 rounded-full border text-xs transition"
+                              style={{ borderColor: "rgba(239,68,68,0.30)", backgroundColor: "rgba(239,68,68,0.14)", color: "rgba(255,255,255,0.90)" }}
                             >
                               Borrar
                             </button>
@@ -723,7 +811,7 @@ export default function AdminMenuPage() {
             </section>
           </div>
         )}
-      </div>
+      </main>
 
       {/* EDIT ITEM DRAWER */}
       <div className={["fixed inset-0 z-40", editOpen ? "" : "pointer-events-none"].join(" ")}>
@@ -758,14 +846,14 @@ export default function AdminMenuPage() {
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 placeholder="Nombre"
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
+                className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/35"
               />
 
               <textarea
                 value={editDesc}
                 onChange={(e) => setEditDesc(e.target.value)}
                 placeholder="Descripción"
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none min-h-[120px]"
+                className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none min-h-[120px] placeholder:text-white/35"
               />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -773,7 +861,7 @@ export default function AdminMenuPage() {
                   value={editPrice}
                   onChange={(e) => setEditPrice(e.target.value)}
                   placeholder="Precio"
-                  className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm outline-none placeholder:text-white/35"
                 />
 
                 <select
@@ -825,7 +913,8 @@ export default function AdminMenuPage() {
               <button
                 onClick={saveItem}
                 disabled={savingItem || !editItem}
-                className="flex-1 px-4 py-3 rounded-2xl border border-white/15 bg-white/10 hover:bg-white/15 transition text-sm font-semibold disabled:opacity-60"
+                className="flex-1 px-4 py-3 rounded-2xl border text-sm font-semibold transition disabled:opacity-60"
+                style={{ borderColor: `${accent}55`, backgroundColor: `${accent}18` }}
               >
                 {savingItem ? "Guardando…" : "Guardar cambios"}
               </button>
