@@ -385,14 +385,23 @@ export default function AdminMenuPage() {
 
   const publicLink = restaurant?.slug ? `/r/${restaurant.slug}` : "";
 
-  // Tabs estilo MenuClient: Todas + Sin categoría + categorías
+  // ✅ Tabs: "Sin categoría" SOLO si hay items sin category_id
   const tabs = useMemo(() => {
+    const hasUncat = items.some((x) => !x.category_id);
     return [
       { id: "__all__", name: "Todo" },
-      { id: "__uncat__", name: "Sin categoría" },
+      ...(hasUncat ? [{ id: "__uncat__", name: "Sin categoría" }] : []),
       ...catsSorted.map((c) => ({ id: c.id, name: c.name })),
     ];
-  }, [catsSorted]);
+  }, [catsSorted, items]);
+
+  // ✅ si ya no hay productos "Sin categoría", evita quedarte en ese filtro
+  useEffect(() => {
+    const hasUncat = items.some((x) => !x.category_id);
+    if (!hasUncat && catFilter === "__uncat__") {
+      setCatFilter("__all__");
+    }
+  }, [items, catFilter]);
 
   return (
     <div className="min-h-screen bg-black text-white overflow-x-hidden" style={{ overflowX: "clip" as any }}>
@@ -668,7 +677,11 @@ export default function AdminMenuPage() {
                               className="px-3 py-2 rounded-full border text-xs transition"
                               style={
                                 (c.is_active ?? true)
-                                  ? { borderColor: "rgba(34,197,94,0.30)", backgroundColor: "rgba(34,197,94,0.14)", color: "rgba(255,255,255,0.90)" }
+                                  ? {
+                                      borderColor: "rgba(34,197,94,0.30)",
+                                      backgroundColor: "rgba(34,197,94,0.14)",
+                                      color: "rgba(255,255,255,0.90)",
+                                    }
                                   : { borderColor: `${accent}25`, backgroundColor: `${accent}10`, color: "rgba(255,255,255,0.80)" }
                               }
                             >
@@ -706,7 +719,11 @@ export default function AdminMenuPage() {
                                 <button
                                   onClick={() => deleteCategory(c)}
                                   className="px-3 py-2 rounded-full border text-xs transition"
-                                  style={{ borderColor: "rgba(239,68,68,0.30)", backgroundColor: "rgba(239,68,68,0.14)", color: "rgba(255,255,255,0.90)" }}
+                                  style={{
+                                    borderColor: "rgba(239,68,68,0.30)",
+                                    backgroundColor: "rgba(239,68,68,0.14)",
+                                    color: "rgba(255,255,255,0.90)",
+                                  }}
                                 >
                                   Borrar
                                 </button>
@@ -841,7 +858,9 @@ export default function AdminMenuPage() {
                                 </span>
                               </div>
 
-                              {it.description ? <div className="text-xs text-white/55 mt-1 line-clamp-2">{it.description}</div> : null}
+                              {it.description ? (
+                                <div className="text-xs text-white/55 mt-1 line-clamp-2">{it.description}</div>
+                              ) : null}
                             </div>
                           </div>
 
@@ -851,7 +870,11 @@ export default function AdminMenuPage() {
                               className="px-3 py-2 rounded-full border text-xs transition"
                               style={
                                 (it.is_active ?? true)
-                                  ? { borderColor: "rgba(34,197,94,0.30)", backgroundColor: "rgba(34,197,94,0.14)", color: "rgba(255,255,255,0.90)" }
+                                  ? {
+                                      borderColor: "rgba(34,197,94,0.30)",
+                                      backgroundColor: "rgba(34,197,94,0.14)",
+                                      color: "rgba(255,255,255,0.90)",
+                                    }
                                   : { borderColor: `${accent}25`, backgroundColor: `${accent}10`, color: "rgba(255,255,255,0.80)" }
                               }
                             >
@@ -868,7 +891,11 @@ export default function AdminMenuPage() {
                             <button
                               onClick={() => deleteItem(it)}
                               className="px-3 py-2 rounded-full border text-xs transition"
-                              style={{ borderColor: "rgba(239,68,68,0.30)", backgroundColor: "rgba(239,68,68,0.14)", color: "rgba(255,255,255,0.90)" }}
+                              style={{
+                                borderColor: "rgba(239,68,68,0.30)",
+                                backgroundColor: "rgba(239,68,68,0.14)",
+                                color: "rgba(255,255,255,0.90)",
+                              }}
                             >
                               Borrar
                             </button>

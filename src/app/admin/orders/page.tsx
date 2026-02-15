@@ -119,6 +119,12 @@ export default function AdminOrders() {
   const router = useRouter();
   const sound = useOrderSound();
 
+  // ✅ ref para que realtime no dependa de sound.* (evita resuscribir canal)
+  const playRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    playRef.current = () => sound.play();
+  }, [sound]);
+
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState<string>("all");
@@ -260,13 +266,16 @@ export default function AdminOrders() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showArchived]);
 
-  // ✅ Realtime SOLO INSERT
+  // ✅ Realtime SOLO INSERT (estable)
   const seenRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!restaurant?.id) return;
 
+    // limpiar vistos al cambiar restaurant
+    seenRef.current = new Set();
+
     const channel = supabase
-      .channel("orders-inserts")
+      .channel(`orders-inserts-${restaurant.id}`)
       .on(
         "postgres_changes",
         {
@@ -286,7 +295,8 @@ export default function AdminOrders() {
           await loadAll(restaurant);
 
           pushToast("🛎️ Nuevo pedido", `Folio #${newOrder?.folio ?? "?"} · ${newOrder?.customer_name ?? "Cliente"}`);
-          sound.play();
+
+          await playRef.current();
         }
       )
       .subscribe();
@@ -295,7 +305,7 @@ export default function AdminOrders() {
       supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restaurant?.id, sound.enabled]);
+  }, [restaurant?.id]);
 
   async function setStatus(orderId: string, status: (typeof STATUS_KEYS)[number]) {
     if (!restaurant?.id) return;
@@ -404,7 +414,11 @@ export default function AdminOrders() {
     if (!restaurant?.id) return;
 
     setSavingMap((m) => ({ ...m, [o.id]: true }));
-    const { error } = await supabase.from("orders").update({ archived_at: null }).eq("id", o.id).eq("restaurant_id", restaurant.id);
+    const { error } = await supabase
+      .from("orders")
+      .update({ archived_at: null })
+      .eq("id", o.id)
+      .eq("restaurant_id", restaurant.id);
     setSavingMap((m) => ({ ...m, [o.id]: false }));
 
     if (error) {
@@ -433,6 +447,7 @@ export default function AdminOrders() {
     router.push("/admin/login");
   }
 
+  // ✅ FIX: ON pero bloqueado tras refresh
   async function toggleSound() {
     if (!sound.enabled) {
       const ok = await sound.unlock();
@@ -442,10 +457,21 @@ export default function AdminOrders() {
       }
       sound.setEnabled(true);
       pushToast("🔔 Sonido activado", sound.ready ? "Listo para nuevos pedidos." : "Cargando sonido…", "success");
-    } else {
-      sound.setEnabled(false);
-      pushToast("🔕 Sonido desactivado");
+      return;
     }
+
+    if (!sound.isUnlocked) {
+      const ok = await sound.unlock();
+      if (!ok) {
+        pushToast("Sonido bloqueado", "Da click otra vez o interactúa con la página.", "danger");
+        return;
+      }
+      pushToast("🔔 Sonido listo", "Ya se desbloqueó el audio.", "success");
+      return;
+    }
+
+    sound.setEnabled(false);
+    pushToast("🔕 Sonido desactivado");
   }
 
   const accent = deriveAccent(restaurant);
@@ -576,7 +602,7 @@ export default function AdminOrders() {
                 onClick={toggleSound}
                 style={{ borderColor: `${accent}35` }}
               >
-                {sound.enabled ? "🔔 Sonido ON" : "🔕 Activar sonido"}
+                {sound.enabled ? (sound.isUnlocked ? "🔔 Sonido ON" : "🔔 ON (bloqueado)") : "🔕 Activar sonido"}
               </button>
 
               <button
@@ -619,9 +645,7 @@ export default function AdminOrders() {
               </button>
 
               {/* overlay */}
-              {mobileMenuOpen ? (
-                <div className="fixed inset-0 z-30" onClick={() => setMobileMenuOpen(false)} />
-              ) : null}
+              {mobileMenuOpen ? <div className="fixed inset-0 z-30" onClick={() => setMobileMenuOpen(false)} /> : null}
 
               {/* dropdown */}
               <div
@@ -651,7 +675,7 @@ export default function AdminOrders() {
                       setMobileMenuOpen(false);
                     }}
                   >
-                    {sound.enabled ? "🔔 Sonido ON" : "🔕 Activar sonido"}
+                    {sound.enabled ? (sound.isUnlocked ? "🔔 Sonido ON" : "🔔 ON (bloqueado)") : "🔕 Activar sonido"}
                   </button>
 
                   <button
@@ -720,6 +744,17 @@ export default function AdminOrders() {
               "select-none snap-x snap-mandatory overscroll-x-contain overscroll-y-none touch-pan-x",
             ].join(" ")}
             style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-x" }}
+            // ✅ FIX: evita que la ruedita mueva el carrusel; la página scrollea normal
+            onWheelCapture={(e) => {
+              const el = e.currentTarget;
+              const canScrollX = el.scrollWidth > el.clientWidth + 1;
+              if (!canScrollX) return;
+
+              // Si viene scroll vertical (ruedita), no lo conviertas en scroll horizontal del carrusel
+              if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                e.stopPropagation(); // no “engancha” el carrusel
+              }
+            }}
           >
             {["all", ...STATUS_KEYS].map((k) => {
               const active = filter === k;

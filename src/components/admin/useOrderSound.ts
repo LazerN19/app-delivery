@@ -8,20 +8,20 @@ const SOUND_SRC = "/sounds/order.mp3";
 export function useOrderSound() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
-  const unlockedRef = useRef(false);
 
   const [enabled, setEnabled] = useState(false);
   const [ready, setReady] = useState(false);
+  const [unlocked, setUnlocked] = useState(false);
 
   useEffect(() => {
-    // preference
+    // Cargar preferencia
     try {
       setEnabled(localStorage.getItem(STORAGE_KEY) === "1");
     } catch {
       setEnabled(false);
     }
 
-    // audio element
+    // Preparar audio (solo client)
     const a = new Audio(SOUND_SRC);
     a.preload = "auto";
     a.volume = 1.0;
@@ -35,19 +35,15 @@ export function useOrderSound() {
     a.addEventListener("canplaythrough", onCanPlay);
     a.addEventListener("error", onErr);
 
-    const t = window.setTimeout(() => {
-      const cur = audioRef.current;
-      if (cur?.readyState && cur.readyState >= 2) setReady(true);
-    }, 1200);
-
     return () => {
-      window.clearTimeout(t);
       a.removeEventListener("canplay", onCanPlay);
       a.removeEventListener("canplaythrough", onCanPlay);
       a.removeEventListener("error", onErr);
+
       a.pause();
       audioRef.current = null;
-      unlockedRef.current = false;
+
+      setUnlocked(false);
 
       if (ctxRef.current) {
         ctxRef.current.close().catch(() => {});
@@ -62,60 +58,72 @@ export function useOrderSound() {
     } catch {}
   }, [enabled]);
 
-  // ✅ Unlock robusto (AudioContext + beep silencioso + prueba mp3)
   async function unlock() {
     try {
-      const AC =
-        (window as any).AudioContext ||
-        (window as any).webkitAudioContext;
-
+      const AC: any = (window as any).AudioContext || (window as any).webkitAudioContext;
       if (!AC) return false;
 
       if (!ctxRef.current) ctxRef.current = new AC();
       const ctx = ctxRef.current;
-      if (!ctx) return false; // TS guard (ya no marca null)
+      if (!ctx) return false;
 
-      if (ctx.state === "suspended") {
-        await ctx.resume();
-      }
+      if (ctx.state === "suspended") await ctx.resume();
 
-      // beep silencioso MUY corto (desbloquea audio estable)
+      // “beep” silencioso (ayuda a “activar” audio en algunos navegadores)
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       gain.gain.value = 0;
-
       osc.connect(gain);
       gain.connect(ctx.destination);
-
       osc.start();
       osc.stop(ctx.currentTime + 0.03);
 
-      // prueba real del mp3 sin molestar
       const a = audioRef.current;
       if (!a) return false;
 
-      const prevVol = a.volume;
-      a.volume = 0.05;
+      // ✅ Test autoplay-friendly: reproducir en muted
       a.currentTime = 0;
+      const prevMuted = a.muted;
+      a.muted = true;
 
       const p = a.play();
       if (p) await p;
 
       a.pause();
       a.currentTime = 0;
-      a.volume = prevVol;
+      a.muted = prevMuted;
 
-      unlockedRef.current = true;
+      setUnlocked(true);
       return true;
     } catch {
-      unlockedRef.current = false;
+      setUnlocked(false);
       return false;
     }
   }
 
+  // ✅ Auto-unlock: si estaba enabled y recargaste, el navegador bloquea audio.
+  // Con esto se desbloquea con el primer click/tap/tecla en la página.
+  useEffect(() => {
+    if (!enabled) return;
+    if (unlocked) return;
+
+    const handler = async () => {
+      await unlock();
+    };
+
+    window.addEventListener("pointerdown", handler, { once: true });
+    window.addEventListener("keydown", handler, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", handler as any);
+      window.removeEventListener("keydown", handler as any);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, unlocked]);
+
   async function play() {
     if (!enabled) return;
-    if (!unlockedRef.current) return;
+    if (!unlocked) return;
 
     const a = audioRef.current;
     if (!a) return;
@@ -125,7 +133,7 @@ export function useOrderSound() {
       const p = a.play();
       if (p) await p;
     } catch {
-      // silencioso
+      // Silencioso: el toast ya informa
     }
   }
 
@@ -135,6 +143,7 @@ export function useOrderSound() {
     ready,
     unlock,
     play,
-    isUnlocked: unlockedRef.current,
+    isUnlocked: unlocked,
+    src: SOUND_SRC,
   };
 }
