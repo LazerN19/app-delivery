@@ -149,6 +149,13 @@ export default function CheckoutPage() {
   const [notes, setNotes] = useState("");
   const [placing, setPlacing] = useState(false);
 
+  // ✅ ubicación + fee en vivo
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [feeLive, setFeeLive] = useState<number | null>(null);
+  const [zoneName, setZoneName] = useState<string | null>(null);
+  const [locLoading, setLocLoading] = useState(false);
+  const [locError, setLocError] = useState<string | null>(null);
+
   const validRestaurant = !!slug && cart.restaurantSlug === slug;
 
   // cargar restaurante + branding
@@ -188,10 +195,80 @@ export default function CheckoutPage() {
   const brand = useMemo(() => (restaurant ? getBrand(restaurant) : null), [restaurant]);
 
   const subtotal = useMemo(() => cart.subtotal, [cart.subtotal]);
-  const deliveryFee = Number(restaurant?.delivery_fee || 0);
+
+  const baseFee = Number(restaurant?.delivery_fee || 0);
+  const deliveryFee = feeLive ?? baseFee;
   const total = deliveryType === "delivery" ? subtotal + deliveryFee : subtotal;
 
   const empty = cart.items.length === 0;
+
+  async function useMyLocation() {
+    setLocError(null);
+    setLocLoading(true);
+
+    if (!navigator.geolocation) {
+      setLocLoading(false);
+      setLocError("Tu navegador no soporta ubicación.");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setCoords({ lat, lng });
+        setLocLoading(false);
+      },
+      () => {
+        setLocLoading(false);
+        setLocError("No pude obtener tu ubicación. Revisa permisos de GPS.");
+      },
+      { enableHighAccuracy: true, timeout: 12000 }
+    );
+  }
+
+  // ✅ cotizar envío en vivo cuando hay coords y es delivery
+  useEffect(() => {
+    if (!slug) return;
+    if (deliveryType !== "delivery") return;
+
+    if (!coords) {
+      setFeeLive(null);
+      setZoneName(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      const { data, error } = await supabase.rpc("get_delivery_quote", {
+        p_restaurant_slug: slug,
+        p_lat: coords.lat,
+        p_lng: coords.lng,
+      });
+
+      if (cancelled) return;
+
+      if (error) {
+        setFeeLive(null);
+        setZoneName(null);
+        return;
+      }
+
+      const row = Array.isArray(data) ? data[0] : data;
+      if (row?.fee != null) {
+        setFeeLive(Number(row.fee));
+        setZoneName(row.zone_name || null);
+      } else {
+        setFeeLive(null);
+        setZoneName(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [slug, deliveryType, coords?.lat, coords?.lng]);
 
   async function placeOrder() {
     if (!slug) return;
@@ -224,6 +301,9 @@ export default function CheckoutPage() {
             neighborhood: neighborhood.trim(),
             city: city.trim(),
             references: references.trim(),
+            // ✅ para fee real en backend
+            lat: coords?.lat ?? null,
+            lng: coords?.lng ?? null,
           }
         : null;
 
@@ -442,16 +522,38 @@ export default function CheckoutPage() {
               <Field value={name} onChange={setName} placeholder="Tu nombre" required />
 
               {/* ✅ Teléfono con prefijo +52 1 fijo */}
-              <Field
-                value={phone}
-                onChange={(v) => setPhone(enforceMxPrefixUI(v))}
-                placeholder="Teléfono"
-                required
-                type="tel"
-              />
+              <Field value={phone} onChange={(v) => setPhone(enforceMxPrefixUI(v))} placeholder="Teléfono" required type="tel" />
 
               {deliveryType === "delivery" ? (
                 <>
+                  {/* ✅ Ubicación GPS para fee real */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={useMyLocation}
+                      className="px-4 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm"
+                      disabled={locLoading}
+                    >
+                      {locLoading ? "Obteniendo ubicación..." : "Usar mi ubicación (GPS)"}
+                    </button>
+
+                    {coords ? (
+                      <div className="text-xs text-white/60">
+                        Ubicación lista{zoneName ? ` · ${zoneName}` : ""}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-white/50">Opcional, mejora el costo de envío.</div>
+                    )}
+                  </div>
+
+                  {locError ? <div className="text-xs text-red-300">{locError}</div> : null}
+
+                  {coords && !zoneName ? (
+                    <div className="text-xs text-yellow-200/80">
+                      No estás dentro de una zona definida. Se usará el envío base ({money(baseFee)}).
+                    </div>
+                  ) : null}
+
                   <Field value={street} onChange={setStreet} placeholder="Calle" required />
 
                   <div className="grid grid-cols-2 gap-2">
@@ -511,6 +613,14 @@ export default function CheckoutPage() {
                   <span>{deliveryType === "delivery" ? money(deliveryFee) : money(0)}</span>
                 </div>
 
+                {deliveryType === "delivery" ? (
+                  <div className="text-[11px] text-white/45">
+                    {feeLive != null
+                      ? `Tarifa por zona${zoneName ? ` (${zoneName})` : ""}.`
+                      : `Tarifa base del restaurante.`}
+                  </div>
+                ) : null}
+
                 <div className="h-px w-full bg-white/10 my-2" />
 
                 <div className="flex justify-between text-base font-semibold">
@@ -536,15 +646,11 @@ export default function CheckoutPage() {
                   Menú
                 </Link>
               </div>
-
-              
             </section>
 
             <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
               <div className="text-sm font-semibold">Seguridad</div>
-              <div className="text-xs text-white/60 mt-2">
-                Este pedido se guarda directamente en el sistema del restaurante.
-              </div>
+              <div className="text-xs text-white/60 mt-2">Este pedido se guarda directamente en el sistema del restaurante.</div>
             </section>
           </aside>
         </div>
