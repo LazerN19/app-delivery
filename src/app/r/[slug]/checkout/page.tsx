@@ -108,7 +108,7 @@ function Field({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={required ? `${placeholder} *` : placeholder}
-      inputMode={type === "tel" ? "tel" : undefined}
+      inputMode={type === "tel" ? "tel" : type === "number" ? "numeric" : undefined}
       autoComplete={type === "tel" ? "tel" : undefined}
       className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none placeholder:text-white/35 focus:border-white/25"
     />
@@ -158,7 +158,9 @@ export default function CheckoutPage() {
   const [selectedSuggestion, setSelectedSuggestion] = useState<GeoResult | null>(null);
 
   // UI: feedback fuerte
-  const [banner, setBanner] = useState<{ title: string; subtitle?: string; tone: "success" | "warn" | "info" } | null>(null);
+  const [banner, setBanner] = useState<{ title: string; subtitle?: string; tone: "success" | "warn" | "info" } | null>(
+    null
+  );
   const [flashFee, setFlashFee] = useState(false);
 
   // debounces
@@ -210,16 +212,13 @@ export default function CheckoutPage() {
 
   const empty = cart.items.length === 0;
 
+  // ✅ CAMBIO: geocode SOLO por colonia + (CP opcional) + ciudad
   function buildGeoQuery() {
     const c = (city.trim() || "Hidalgo del Parral").trim();
-    const s = street.trim();
-    const n = number.trim();
     const col = neighborhood.trim();
     const cp = postalCode.trim();
-
-    const addr = [s, n, col].filter(Boolean).join(" ");
-    const q0 = addr || col || s || "";
-    return q0 ? `${q0}${cp ? ` ${cp}` : ""}, ${c}` : "";
+    const base = [col, cp].filter(Boolean).join(" ");
+    return base ? `${base}, ${c}` : "";
   }
 
   function resetLocationState() {
@@ -234,7 +233,7 @@ export default function CheckoutPage() {
     lastGeoQueryRef.current = "";
   }
 
-  // auto geocode: solo sugerencias
+  // ✅ auto geocode: SOLO colonia/cp/ciudad. Calle/número ya NO influyen
   useEffect(() => {
     if (!slug) return;
     if (deliveryType !== "delivery") return;
@@ -282,7 +281,7 @@ export default function CheckoutPage() {
 
         if (!Array.isArray(j.results) || j.results.length === 0) {
           setGeoLoading(false);
-          setGeoError("No pude ubicar esa dirección. Prueba otra colonia o agrega calle/número/CP.");
+          setGeoError("No pude ubicar esa colonia. Prueba otra o agrega código postal.");
           setSuggestions([]);
           setSelectedSuggestion(null);
           setCoords(null);
@@ -319,7 +318,7 @@ export default function CheckoutPage() {
     }, 650);
 
     return () => clearTimeout(t);
-  }, [slug, deliveryType, neighborhood, street, number, city, postalCode]);
+  }, [slug, deliveryType, neighborhood, city, postalCode]);
 
   function pickSuggestion(s: GeoResult) {
     setSelectedSuggestion(s);
@@ -329,7 +328,6 @@ export default function CheckoutPage() {
     setGeoError(null);
     setAddressConfirmed(true);
 
-    // feedback fuerte
     setBanner({ title: "Dirección confirmada", subtitle: "Calculando zona y envío…", tone: "success" });
     window.setTimeout(() => setBanner(null), 2500);
   }
@@ -383,11 +381,9 @@ export default function CheckoutPage() {
       setFeeLive(newFee);
       setZoneName(newZone);
 
-      // flash del fee en el resumen
       setFlashFee(true);
       window.setTimeout(() => setFlashFee(false), 1100);
 
-      // banner con resultado
       setBanner({
         title: "Envío actualizado",
         subtitle: `${newZone ? `Zona: ${newZone} · ` : ""}Envío: ${money(newFee ?? baseFee)}`,
@@ -420,14 +416,18 @@ export default function CheckoutPage() {
       }
 
       if (!addressConfirmed) {
-        setBanner({ title: "Confirma tu dirección", subtitle: "Selecciona una opción de la lista para calcular envío.", tone: "warn" });
+        setBanner({
+          title: "Confirma tu dirección",
+          subtitle: "Selecciona una opción de la lista para calcular envío.",
+          tone: "warn",
+        });
         window.setTimeout(() => setBanner(null), 2500);
         return;
       }
 
       const c = await ensureCoords();
       if (!c) {
-        setBanner({ title: "No pude ubicar tu dirección", subtitle: "Intenta escribir más específico o agrega código postal.", tone: "warn" });
+        setBanner({ title: "No pude ubicar tu colonia", subtitle: "Prueba otra o agrega código postal.", tone: "warn" });
         window.setTimeout(() => setBanner(null), 2500);
         return;
       }
@@ -449,7 +449,7 @@ export default function CheckoutPage() {
         references: references.trim(),
         lat: c.lat,
         lng: c.lng,
-        coords_source: "auto",
+        coords_source: "auto_colonia",
         address_confirmed: true,
       };
 
@@ -524,19 +524,14 @@ export default function CheckoutPage() {
   }
 
   const confirmDisabled =
-    placing ||
-    !restaurant ||
-    !validRestaurant ||
-    empty ||
-    !canOrder ||
-    (deliveryType === "delivery" && !addressConfirmed);
+    placing || !restaurant || !validRestaurant || empty || !canOrder || (deliveryType === "delivery" && !addressConfirmed);
 
   const bannerStyle =
     banner?.tone === "success"
       ? "border-emerald-400/60 bg-emerald-400/15 text-emerald-50"
       : banner?.tone === "warn"
-        ? "border-amber-400/70 bg-amber-400/15 text-amber-50"
-        : "border-sky-400/60 bg-sky-400/15 text-sky-50";
+      ? "border-amber-400/70 bg-amber-400/15 text-amber-50"
+      : "border-sky-400/60 bg-sky-400/15 text-sky-50";
 
   const addrCardStyle = addressConfirmed
     ? "border-emerald-400/60 bg-emerald-400/10"
@@ -686,7 +681,9 @@ export default function CheckoutPage() {
                   type="button"
                   className={[
                     "rounded-2xl border px-4 py-3 text-sm transition",
-                    deliveryType === "delivery" ? "border-white/20 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
+                    deliveryType === "delivery"
+                      ? "border-white/20 bg-white/10"
+                      : "border-white/10 bg-white/5 hover:bg-white/10",
                   ].join(" ")}
                   onClick={() => setDeliveryType("delivery")}
                   style={deliveryType === "delivery" ? { borderColor: `${accent}75`, backgroundColor: `${accent}22` } : undefined}
@@ -697,11 +694,14 @@ export default function CheckoutPage() {
                   type="button"
                   className={[
                     "rounded-2xl border px-4 py-3 text-sm transition",
-                    deliveryType === "pickup" ? "border-white/20 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
+                    deliveryType === "pickup"
+                      ? "border-white/20 bg-white/10"
+                      : "border-white/10 bg-white/5 hover:bg-white/10",
                   ].join(" ")}
                   onClick={() => {
                     setDeliveryType("pickup");
                     resetLocationState();
+                    setBanner(null);
                   }}
                   style={deliveryType === "pickup" ? { borderColor: `${accent}75`, backgroundColor: `${accent}22` } : undefined}
                 >
@@ -726,8 +726,8 @@ export default function CheckoutPage() {
                           {addressConfirmed
                             ? `${zoneName ? `Zona: ${zoneName} · ` : ""}Envío: ${money(deliveryFee)}`
                             : geoLoading
-                              ? "Buscando sugerencias…"
-                              : "Selecciona una opción de la lista para calcular tu zona y envío."}
+                            ? "Buscando colonias…"
+                            : "Selecciona una opción de la lista para calcular tu zona y envío."}
                         </div>
                       </div>
 
@@ -735,11 +735,10 @@ export default function CheckoutPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            // Permite “editar” otra vez
                             setAddressConfirmed(false);
                             setZoneName(null);
                             setFeeLive(null);
-                            setBanner({ title: "Edita tu dirección", subtitle: "Selecciona otra opción si es necesario.", tone: "info" });
+                            setBanner({ title: "Edita tu dirección", subtitle: "Selecciona otra colonia si es necesario.", tone: "info" });
                             window.setTimeout(() => setBanner(null), 2500);
                           }}
                           className="text-xs px-3 py-2 rounded-full border border-white/15 bg-white/10 hover:bg-white/15 transition"
@@ -751,7 +750,7 @@ export default function CheckoutPage() {
 
                     {addressConfirmed && selectedSuggestion?.display ? (
                       <div className="mt-3 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/80">
-                        <div className="opacity-70">📍 Dirección seleccionada</div>
+                        <div className="opacity-70">📍 Colonia seleccionada</div>
                         <div className="mt-1">{selectedSuggestion.display}</div>
                       </div>
                     ) : null}
@@ -759,41 +758,16 @@ export default function CheckoutPage() {
                     {geoError ? <div className="mt-3 text-xs text-amber-200/90">{geoError}</div> : null}
                   </div>
 
-                  <Field
-                    value={street}
-                    onChange={(v) => {
-                      setStreet(v);
-                      setSelectedSuggestion(null);
-                      setSuggestions([]);
-                      setCoords(null);
-                      setCoordsSource(null);
-                      setZoneName(null);
-                      setFeeLive(null);
-                      setAddressConfirmed(false);
-                    }}
-                    placeholder="Calle"
-                    required
-                  />
+                  {/* ✅ Calle/numero YA NO resetean confirmación */}
+                  <Field value={street} onChange={setStreet} placeholder="Calle" required />
 
                   <div className="grid grid-cols-2 gap-2">
-                    <Field
-                      value={number}
-                      onChange={(v) => {
-                        setNumber(v);
-                        setSelectedSuggestion(null);
-                        setSuggestions([]);
-                        setCoords(null);
-                        setCoordsSource(null);
-                        setZoneName(null);
-                        setFeeLive(null);
-                        setAddressConfirmed(false);
-                      }}
-                      placeholder="Número"
-                    />
+                    <Field value={number} onChange={setNumber} placeholder="Número" />
                     <Field
                       value={neighborhood}
                       onChange={(v) => {
                         setNeighborhood(v);
+                        // ✅ solo colonia cambia la ubicación/quote
                         setSelectedSuggestion(null);
                         setSuggestions([]);
                         setCoords(null);
@@ -812,6 +786,13 @@ export default function CheckoutPage() {
                       value={city}
                       onChange={(v) => {
                         setCity(v);
+                        // ✅ city afecta query
+                        setSelectedSuggestion(null);
+                        setSuggestions([]);
+                        setCoords(null);
+                        setCoordsSource(null);
+                        setZoneName(null);
+                        setFeeLive(null);
                         setAddressConfirmed(false);
                       }}
                       placeholder="Ciudad (opcional)"
@@ -821,6 +802,13 @@ export default function CheckoutPage() {
                       onChange={(v) => {
                         const cp = (v || "").replace(/[^\d]/g, "").slice(0, 5);
                         setPostalCode(cp);
+                        // ✅ CP afecta query
+                        setSelectedSuggestion(null);
+                        setSuggestions([]);
+                        setCoords(null);
+                        setCoordsSource(null);
+                        setZoneName(null);
+                        setFeeLive(null);
                         setAddressConfirmed(false);
                       }}
                       placeholder="Código postal (opcional)"
@@ -832,7 +820,7 @@ export default function CheckoutPage() {
                     <div className="rounded-2xl border border-amber-400/40 bg-amber-400/10 overflow-hidden">
                       <div className="px-4 py-2 text-xs text-amber-50/90 border-b border-amber-400/30 flex items-center gap-2">
                         <span>👇</span>
-                        <span className="font-semibold">Selecciona tu domicilio</span>
+                        <span className="font-semibold">Selecciona tu colonia</span>
                         <span className="text-amber-50/70 font-normal">(esto define tu envío)</span>
                       </div>
                       <div className="max-h-56 overflow-auto">
@@ -929,7 +917,7 @@ export default function CheckoutPage() {
                         {feeLive != null ? "Tarifa por zona aplicada." : "Tarifa base aplicada."}
                       </>
                     ) : (
-                      "Selecciona tu domicilio para calcular tu tarifa."
+                      "Selecciona tu colonia para calcular tu tarifa."
                     )}
                   </div>
                 ) : null}
