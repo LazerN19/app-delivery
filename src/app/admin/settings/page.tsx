@@ -154,6 +154,39 @@ function writeCachedAccent(slug: string, color: string) {
   } catch {}
 }
 
+/** ✅ Image helpers (SUBE LOGO SIN FALLAS) */
+async function resizeToPng(file: File, maxSize = 1024, quality = 0.92): Promise<Blob> {
+  const img = document.createElement("img");
+  const url = URL.createObjectURL(file);
+
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error("No se pudo leer la imagen"));
+    img.src = url;
+  });
+
+  const w = img.naturalWidth || img.width;
+  const h = img.naturalHeight || img.height;
+
+  const scale = Math.min(1, maxSize / Math.max(w, h));
+  const nw = Math.max(1, Math.round(w * scale));
+  const nh = Math.max(1, Math.round(h * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = nw;
+  canvas.height = nh;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas no disponible");
+
+  ctx.drawImage(img, 0, 0, nw, nh);
+  URL.revokeObjectURL(url);
+
+  // PNG: ignora quality, pero dejamos firma uniforme
+  const blob: Blob = await new Promise((resolve) => canvas.toBlob((b) => resolve(b as Blob), "image/png", quality));
+  return blob;
+}
+
 export default function AdminSettings() {
   const router = useRouter();
 
@@ -168,9 +201,7 @@ export default function AdminSettings() {
   function pushToast(title: string, body?: string) {
     const id = uid();
     setToasts((prev) => [{ id, title, body }, ...prev].slice(0, 3));
-    window.setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4500);
+    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
   }
 
   // Branding form fields
@@ -341,14 +372,10 @@ export default function AdminSettings() {
       brand_tagline: (brandTagline || "").trim() || null,
       accent_color: (accentColor || "").trim() || null,
       hours: finalHours ?? null,
-      delivery_fee: Number(deliveryFee || 0), // ✅ GUARDAMOS ENVÍO
+      delivery_fee: Number(deliveryFee || 0),
     };
 
-    const { error } = await supabase
-      .from("restaurants")
-      .update(payload)
-      .eq("id", restaurant.id)
-      .eq("owner_id", user.id);
+    const { error } = await supabase.from("restaurants").update(payload).eq("id", restaurant.id).eq("owner_id", user.id);
 
     setSaving(false);
 
@@ -357,37 +384,52 @@ export default function AdminSettings() {
       return;
     }
 
-    // ✅ cachea también al guardar
     writeCachedAccent(restaurant.slug, accentColor);
-
     pushToast("✅ Guardado", "Cambios aplicados correctamente.");
   }
 
   async function uploadLogo(file: File) {
     if (!restaurant) return;
 
-    setUploading(true);
-
-    const ext = file.name.split(".").pop() || "png";
-    const path = `${restaurant.id}/logo.${ext}`;
-
-    const { error: upErr } = await supabase.storage.from("restaurant-assets").upload(path, file, {
-      upsert: true,
-      cacheControl: "3600",
-      contentType: file.type || "image/png",
-    });
-
-    if (upErr) {
-      setUploading(false);
-      pushToast("❌ Error al subir logo", upErr.message);
+    // ✅ evita HEIC / formatos raros
+    const okTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+    if (!okTypes.includes(file.type)) {
+      pushToast("⚠️ Formato no soportado", "Usa PNG o JPG (en iPhone mándalo como “Más compatible”, no HEIC).");
       return;
     }
 
-    const { data } = supabase.storage.from("restaurant-assets").getPublicUrl(path);
-    setLogoUrl(data.publicUrl);
+    setUploading(true);
 
-    setUploading(false);
-    pushToast("✅ Logo actualizado", "Se subió correctamente.");
+    try {
+      // ✅ convertir + resize (evita que “no cargue” por ser gigante)
+      const blob = await resizeToPng(file, 1024);
+
+      // ✅ path fijo (simple) + cache bust
+      const path = `${restaurant.id}/logo.png`;
+
+      const { error: upErr } = await supabase.storage.from("restaurant-assets").upload(path, blob, {
+        upsert: true,
+        cacheControl: "3600",
+        contentType: "image/png",
+      });
+
+      if (upErr) {
+        pushToast("❌ Error al subir logo", upErr.message);
+        return;
+      }
+
+      const { data } = supabase.storage.from("restaurant-assets").getPublicUrl(path);
+
+      // ✅ fuerza refresco en preview
+      const busted = `${data.publicUrl}?v=${Date.now()}`;
+      setLogoUrl(busted);
+
+      pushToast("✅ Logo actualizado", "Se subió correctamente.");
+    } catch (e: any) {
+      pushToast("❌ No se pudo procesar la imagen", e?.message || "Intenta con otra imagen.");
+    } finally {
+      setUploading(false);
+    }
   }
 
   if (loading) {
@@ -637,11 +679,7 @@ export default function AdminSettings() {
                     <div className="flex items-center justify-between sm:w-44">
                       <div className="text-sm font-medium">{DAY_LABEL[k]}</div>
                       <label className="inline-flex items-center gap-2 text-xs text-white/60">
-                        <input
-                          type="checkbox"
-                          checked={d.closed}
-                          onChange={(e) => updateDay(k, { closed: e.target.checked })}
-                        />
+                        <input type="checkbox" checked={d.closed} onChange={(e) => updateDay(k, { closed: e.target.checked })} />
                         Cerrado
                       </label>
                     </div>
@@ -675,9 +713,7 @@ export default function AdminSettings() {
                 );
               })}
 
-              <div className="text-[11px] text-white/45">
-                Tip: usa 24h (ej. 13:30). Si manejas horarios partidos o más complejos, usa el modo JSON.
-              </div>
+              <div className="text-[11px] text-white/45">Tip: usa 24h (ej. 13:30). Si manejas horarios partidos o más complejos, usa el modo JSON.</div>
             </div>
           ) : (
             <div className="space-y-2">
@@ -722,7 +758,7 @@ export default function AdminSettings() {
                 className="mt-1 w-full text-sm"
               />
               <p className="mt-2 text-[11px] text-white/45">
-                Se sube al bucket <span className="font-mono">restaurant-assets</span>.
+                Se sube al bucket <span className="font-mono">restaurant-assets</span>. Se convierte y optimiza automáticamente.
               </p>
             </div>
           </div>
