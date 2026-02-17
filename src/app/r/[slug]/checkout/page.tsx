@@ -88,6 +88,7 @@ function toMxWhatsAppE164(uiPhone: string) {
   return local ? `+521${local}` : "";
 }
 
+/** Field fuera para no remonte */
 function Field({
   value,
   onChange,
@@ -109,7 +110,7 @@ function Field({
       placeholder={required ? `${placeholder} *` : placeholder}
       inputMode={type === "tel" ? "tel" : undefined}
       autoComplete={type === "tel" ? "tel" : undefined}
-      className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none placeholder:text-white/35 focus:border-white/20"
+      className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none placeholder:text-white/35 focus:border-white/25"
     />
   );
 }
@@ -133,32 +134,39 @@ export default function CheckoutPage() {
   const [street, setStreet] = useState("");
   const [number, setNumber] = useState("");
   const [neighborhood, setNeighborhood] = useState("");
-  const [city, setCity] = useState(""); // opcional
+  const [postalCode, setPostalCode] = useState("");
+  const [city, setCity] = useState("");
   const [references, setReferences] = useState("");
 
   const [notes, setNotes] = useState("");
   const [placing, setPlacing] = useState(false);
 
-  // coords
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [coordsSource, setCoordsSource] = useState<"auto" | null>(null);
 
-  // fee live
   const [feeLive, setFeeLive] = useState<number | null>(null);
   const [zoneName, setZoneName] = useState<string | null>(null);
 
-  // geocode UI
+  const [addressConfirmed, setAddressConfirmed] = useState(false);
+
+  // estados auto-geocode
   const [geoLoading, setGeoLoading] = useState(false);
   const [geoError, setGeoError] = useState<string | null>(null);
 
-  // ✅ sugerencias + selección
+  // sugerencias
   const [suggestions, setSuggestions] = useState<GeoResult[]>([]);
   const [selectedSuggestion, setSelectedSuggestion] = useState<GeoResult | null>(null);
+
+  // UI: feedback fuerte
+  const [banner, setBanner] = useState<{ title: string; subtitle?: string; tone: "success" | "warn" | "info" } | null>(null);
+  const [flashFee, setFlashFee] = useState(false);
+
+  // debounces
   const lastGeoQueryRef = useRef<string>("");
+  const activeReqRef = useRef(0);
 
   const validRestaurant = !!slug && cart.restaurantSlug === slug;
 
-  // cargar restaurante
   useEffect(() => {
     if (!slug) return;
 
@@ -167,7 +175,9 @@ export default function CheckoutPage() {
 
       const { data, error } = await supabase
         .from("restaurants")
-        .select("name,slug,delivery_fee,is_active,hours,logo_url,brand_icon,brand_text,brand_tagline,accent_color,brand_mode")
+        .select(
+          "name,slug,delivery_fee,is_active,hours,logo_url,brand_icon,brand_text,brand_tagline,accent_color,brand_mode"
+        )
         .eq("slug", slug)
         .single();
 
@@ -185,6 +195,7 @@ export default function CheckoutPage() {
   }, [slug]);
 
   const accent = deriveAccent(restaurant);
+
   const open = useMemo(() => getOpenStatus(restaurant?.hours), [restaurant?.hours]);
   const canOrder = !!restaurant?.is_active && open.isOpen;
 
@@ -199,12 +210,35 @@ export default function CheckoutPage() {
 
   const empty = cart.items.length === 0;
 
-  // ✅ AUTO: buscar sugerencias por lo que escriben (tolerante)
+  function buildGeoQuery() {
+    const c = (city.trim() || "Hidalgo del Parral").trim();
+    const s = street.trim();
+    const n = number.trim();
+    const col = neighborhood.trim();
+    const cp = postalCode.trim();
+
+    const addr = [s, n, col].filter(Boolean).join(" ");
+    const q0 = addr || col || s || "";
+    return q0 ? `${q0}${cp ? ` ${cp}` : ""}, ${c}` : "";
+  }
+
+  function resetLocationState() {
+    setCoords(null);
+    setCoordsSource(null);
+    setZoneName(null);
+    setFeeLive(null);
+    setSelectedSuggestion(null);
+    setSuggestions([]);
+    setGeoError(null);
+    setAddressConfirmed(false);
+    lastGeoQueryRef.current = "";
+  }
+
+  // auto geocode: solo sugerencias
   useEffect(() => {
     if (!slug) return;
     if (deliveryType !== "delivery") return;
 
-    // reset si no hay colonia
     if (!neighborhood.trim()) {
       setGeoLoading(false);
       setGeoError(null);
@@ -212,26 +246,19 @@ export default function CheckoutPage() {
       setSelectedSuggestion(null);
       setCoords(null);
       setCoordsSource(null);
+      setAddressConfirmed(false);
+      setFeeLive(null);
+      setZoneName(null);
       return;
     }
 
-    // Si el usuario edita, invalidamos selección previa
-    setSelectedSuggestion(null);
+    const q = buildGeoQuery();
+    if (!q) return;
 
-    // arma query: con calle+colonia+ciudad si existe, pero permite abreviaciones porque nominatim “fuzzea” algo
-    const c = (city.trim() || "Hidalgo del Parral").trim();
-    const s = street.trim();
-    const n = number.trim();
-    const col = neighborhood.trim();
-
-    // ✅ para ayudar: si solo ponen colonia, que también funcione
-    const q = [s ? `${s}${n ? ` ${n}` : ""}` : "", col, c].filter(Boolean).join(", ");
-
-    // no repetir mismo query
     if (lastGeoQueryRef.current === q) return;
     lastGeoQueryRef.current = q;
 
-    let cancelled = false;
+    const reqId = ++activeReqRef.current;
     setGeoError(null);
 
     const t = setTimeout(async () => {
@@ -240,59 +267,90 @@ export default function CheckoutPage() {
         const r = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`, { cache: "no-store" });
         const j = await r.json();
 
-        if (cancelled) return;
+        if (activeReqRef.current !== reqId) return;
 
-        if (!j?.ok || !Array.isArray(j.results)) {
+        if (!r.ok || !j?.ok) {
           setGeoLoading(false);
+          setGeoError("Servicio de ubicación saturado. Intenta de nuevo o agrega código postal.");
           setSuggestions([]);
-          setGeoError("No pude ubicar la colonia. Intenta escribir un poco más.");
+          setSelectedSuggestion(null);
+          setCoords(null);
+          setCoordsSource(null);
+          setAddressConfirmed(false);
           return;
         }
 
-        const list: GeoResult[] = j.results
+        if (!Array.isArray(j.results) || j.results.length === 0) {
+          setGeoLoading(false);
+          setGeoError("No pude ubicar esa dirección. Prueba otra colonia o agrega calle/número/CP.");
+          setSuggestions([]);
+          setSelectedSuggestion(null);
+          setCoords(null);
+          setCoordsSource(null);
+          setAddressConfirmed(false);
+          return;
+        }
+
+        const results: GeoResult[] = j.results
           .map((x: any) => ({
             lat: Number(x.lat),
             lng: Number(x.lng),
             display: String(x.display || ""),
             raw: x.raw,
           }))
-          .filter((x: GeoResult) => Number.isFinite(x.lat) && Number.isFinite(x.lng) && x.display);
+          .filter((x: GeoResult) => Number.isFinite(x.lat) && Number.isFinite(x.lng));
 
-        setSuggestions(list);
         setGeoLoading(false);
-
-        if (list.length === 0) {
-          setGeoError("No encontré coincidencias. Prueba con otro nombre o agrega la calle.");
-        }
+        setSuggestions(results);
+        setSelectedSuggestion(null);
+        setCoords(null);
+        setCoordsSource(null);
+        setAddressConfirmed(false);
       } catch {
-        if (cancelled) return;
+        if (activeReqRef.current !== reqId) return;
         setGeoLoading(false);
-        setSuggestions([]);
         setGeoError("Error consultando ubicación. Intenta de nuevo.");
+        setSuggestions([]);
+        setSelectedSuggestion(null);
+        setCoords(null);
+        setCoordsSource(null);
+        setAddressConfirmed(false);
       }
     }, 650);
 
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [slug, deliveryType, neighborhood, street, number, city]);
+    return () => clearTimeout(t);
+  }, [slug, deliveryType, neighborhood, street, number, city, postalCode]);
 
-  // ✅ elegir sugerencia: se quitan las demás y se setean coords
   function pickSuggestion(s: GeoResult) {
     setSelectedSuggestion(s);
-    setSuggestions([]); // ✅ aquí se “quitan las demás”
     setCoords({ lat: s.lat, lng: s.lng });
     setCoordsSource("auto");
+    setSuggestions([]);
     setGeoError(null);
+    setAddressConfirmed(true);
+
+    // feedback fuerte
+    setBanner({ title: "Dirección confirmada", subtitle: "Calculando zona y envío…", tone: "success" });
+    window.setTimeout(() => setBanner(null), 2500);
   }
 
-  // ✅ cotizar envío en vivo cuando hay coords y es delivery
+  async function ensureCoords(): Promise<{ lat: number; lng: number } | null> {
+    if (coords && Number.isFinite(coords.lat) && Number.isFinite(coords.lng)) return coords;
+    if (selectedSuggestion && Number.isFinite(selectedSuggestion.lat) && Number.isFinite(selectedSuggestion.lng)) {
+      const c = { lat: selectedSuggestion.lat, lng: selectedSuggestion.lng };
+      setCoords(c);
+      setCoordsSource("auto");
+      return c;
+    }
+    return null;
+  }
+
+  // quote en vivo solo confirmado
   useEffect(() => {
     if (!slug) return;
     if (deliveryType !== "delivery") return;
 
-    if (!coords) {
+    if (!coords || !addressConfirmed) {
       setFeeLive(null);
       setZoneName(null);
       return;
@@ -312,23 +370,36 @@ export default function CheckoutPage() {
       if (error) {
         setFeeLive(null);
         setZoneName(null);
+        setBanner({ title: "No pude calcular zona", subtitle: "Se usará el envío base del restaurante.", tone: "warn" });
+        window.setTimeout(() => setBanner(null), 2500);
         return;
       }
 
       const row = Array.isArray(data) ? data[0] : data;
-      if (row?.fee != null) {
-        setFeeLive(Number(row.fee));
-        setZoneName(row.zone_name || null);
-      } else {
-        setFeeLive(null);
-        setZoneName(null);
-      }
+
+      const newFee = row?.fee != null ? Number(row.fee) : null;
+      const newZone = row?.zone_name || null;
+
+      setFeeLive(newFee);
+      setZoneName(newZone);
+
+      // flash del fee en el resumen
+      setFlashFee(true);
+      window.setTimeout(() => setFlashFee(false), 1100);
+
+      // banner con resultado
+      setBanner({
+        title: "Envío actualizado",
+        subtitle: `${newZone ? `Zona: ${newZone} · ` : ""}Envío: ${money(newFee ?? baseFee)}`,
+        tone: "success",
+      });
+      window.setTimeout(() => setBanner(null), 2800);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [slug, deliveryType, coords?.lat, coords?.lng]);
+  }, [slug, deliveryType, addressConfirmed, coords?.lat, coords?.lng, baseFee]);
 
   async function placeOrder() {
     if (!slug) return;
@@ -342,50 +413,106 @@ export default function CheckoutPage() {
     if (!phoneE164) return;
 
     if (deliveryType === "delivery") {
-      if (!street.trim() || !neighborhood.trim()) return;
+      if (!street.trim() || !neighborhood.trim()) {
+        setBanner({ title: "Falta tu domicilio", subtitle: "Escribe calle y colonia.", tone: "warn" });
+        window.setTimeout(() => setBanner(null), 2500);
+        return;
+      }
+
+      if (!addressConfirmed) {
+        setBanner({ title: "Confirma tu dirección", subtitle: "Selecciona una opción de la lista para calcular envío.", tone: "warn" });
+        window.setTimeout(() => setBanner(null), 2500);
+        return;
+      }
+
+      const c = await ensureCoords();
+      if (!c) {
+        setBanner({ title: "No pude ubicar tu dirección", subtitle: "Intenta escribir más específico o agrega código postal.", tone: "warn" });
+        window.setTimeout(() => setBanner(null), 2500);
+        return;
+      }
+
+      setPlacing(true);
+
+      const payloadItems = cart.items.map((i) => ({
+        menu_item_id: i.id,
+        qty: i.qty,
+        notes: null,
+      }));
+
+      const address = {
+        street: street.trim(),
+        number: number.trim(),
+        neighborhood: neighborhood.trim(),
+        postal_code: postalCode.trim(),
+        city: city.trim(),
+        references: references.trim(),
+        lat: c.lat,
+        lng: c.lng,
+        coords_source: "auto",
+        address_confirmed: true,
+      };
+
+      const { data, error } = await supabase.rpc("create_order", {
+        p_restaurant_slug: slug,
+        p_customer_name: name.trim(),
+        p_customer_phone: phoneE164,
+        p_delivery_type: deliveryType,
+        p_address: address,
+        p_payment_method: "cash",
+        p_notes: notes.trim() || null,
+        p_items: payloadItems,
+      });
+
+      setPlacing(false);
+
+      if (error) {
+        setBanner({ title: "No se pudo crear el pedido", subtitle: error.message, tone: "warn" });
+        window.setTimeout(() => setBanner(null), 3000);
+        return;
+      }
+
+      const res = Array.isArray(data) ? data[0] : data;
+      cart.clear();
+
+      if (res?.public_tracking_token) {
+        router.push(`/t/${res.public_tracking_token}`);
+        return;
+      }
+
+      router.push(`/r/${slug}`);
+      return;
     }
 
+    // pickup
     setPlacing(true);
 
     const payloadItems = cart.items.map((i) => ({
       menu_item_id: i.id,
       qty: i.qty,
-      notes: notes.trim() || null,
+      notes: null,
     }));
-
-    const address =
-      deliveryType === "delivery"
-        ? {
-            street: street.trim(),
-            number: number.trim(),
-            neighborhood: neighborhood.trim(),
-            city: city.trim(),
-            references: references.trim(),
-            lat: coords?.lat ?? null,
-            lng: coords?.lng ?? null,
-            coords_source: coordsSource,
-          }
-        : null;
 
     const { data, error } = await supabase.rpc("create_order", {
       p_restaurant_slug: slug,
       p_customer_name: name.trim(),
       p_customer_phone: phoneE164,
-      p_delivery_type: deliveryType,
-      p_address: address,
+      p_delivery_type: "pickup",
+      p_address: null,
       p_payment_method: "cash",
       p_notes: notes.trim() || null,
       p_items: payloadItems,
     });
 
     setPlacing(false);
+
     if (error) {
-      alert(error.message);
+      setBanner({ title: "No se pudo crear el pedido", subtitle: error.message, tone: "warn" });
+      window.setTimeout(() => setBanner(null), 3000);
       return;
     }
 
     const res = Array.isArray(data) ? data[0] : data;
-
     cart.clear();
 
     if (res?.public_tracking_token) {
@@ -395,6 +522,25 @@ export default function CheckoutPage() {
 
     router.push(`/r/${slug}`);
   }
+
+  const confirmDisabled =
+    placing ||
+    !restaurant ||
+    !validRestaurant ||
+    empty ||
+    !canOrder ||
+    (deliveryType === "delivery" && !addressConfirmed);
+
+  const bannerStyle =
+    banner?.tone === "success"
+      ? "border-emerald-400/60 bg-emerald-400/15 text-emerald-50"
+      : banner?.tone === "warn"
+        ? "border-amber-400/70 bg-amber-400/15 text-amber-50"
+        : "border-sky-400/60 bg-sky-400/15 text-sky-50";
+
+  const addrCardStyle = addressConfirmed
+    ? "border-emerald-400/60 bg-emerald-400/10"
+    : "border-amber-400/70 bg-amber-400/10";
 
   return (
     <div className="min-h-screen bg-black text-white">
@@ -461,6 +607,14 @@ export default function CheckoutPage() {
 
       {/* Content */}
       <div className="relative mx-auto max-w-4xl px-5 py-8">
+        {/* Banner global */}
+        {banner ? (
+          <div className={`mb-5 rounded-2xl border px-4 py-3 ${bannerStyle} shadow-[0_12px_40px_rgba(0,0,0,0.35)]`}>
+            <div className="font-semibold text-sm">{banner.title}</div>
+            {banner.subtitle ? <div className="text-xs opacity-90 mt-0.5">{banner.subtitle}</div> : null}
+          </div>
+        ) : null}
+
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
           {/* Left */}
           <div className="lg:col-span-3 space-y-5">
@@ -535,7 +689,7 @@ export default function CheckoutPage() {
                     deliveryType === "delivery" ? "border-white/20 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
                   ].join(" ")}
                   onClick={() => setDeliveryType("delivery")}
-                  style={deliveryType === "delivery" ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` } : undefined}
+                  style={deliveryType === "delivery" ? { borderColor: `${accent}75`, backgroundColor: `${accent}22` } : undefined}
                 >
                   Entrega
                 </button>
@@ -545,8 +699,11 @@ export default function CheckoutPage() {
                     "rounded-2xl border px-4 py-3 text-sm transition",
                     deliveryType === "pickup" ? "border-white/20 bg-white/10" : "border-white/10 bg-white/5 hover:bg-white/10",
                   ].join(" ")}
-                  onClick={() => setDeliveryType("pickup")}
-                  style={deliveryType === "pickup" ? { borderColor: `${accent}55`, backgroundColor: `${accent}18` } : undefined}
+                  onClick={() => {
+                    setDeliveryType("pickup");
+                    resetLocationState();
+                  }}
+                  style={deliveryType === "pickup" ? { borderColor: `${accent}75`, backgroundColor: `${accent}22` } : undefined}
                 >
                   Recoger
                 </button>
@@ -557,49 +714,153 @@ export default function CheckoutPage() {
 
               {deliveryType === "delivery" ? (
                 <>
-                  <div className="text-xs text-white/55">
-                    {geoLoading ? "Buscando ubicación..." : selectedSuggestion ? "✅ Ubicación seleccionada." : "Escribe tu calle y colonia (puedes abreviar)."}
-                  </div>
+                  {/* BLOQUE DIRECCIÓN (más comercial) */}
+                  <div className={`rounded-2xl border p-4 transition-all ${addrCardStyle}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold flex items-center gap-2">
+                          <span className="text-lg">{addressConfirmed ? "✅" : "⚠️"}</span>
+                          <span>{addressConfirmed ? "Dirección confirmada" : "Confirma tu dirección"}</span>
+                        </div>
+                        <div className="text-xs opacity-90 mt-1">
+                          {addressConfirmed
+                            ? `${zoneName ? `Zona: ${zoneName} · ` : ""}Envío: ${money(deliveryFee)}`
+                            : geoLoading
+                              ? "Buscando sugerencias…"
+                              : "Selecciona una opción de la lista para calcular tu zona y envío."}
+                        </div>
+                      </div>
 
-                  {selectedSuggestion ? (
-                    <div className="text-xs text-white/60">
-                      Seleccionado: <span className="text-white/80">{selectedSuggestion.display}</span>
-                    </div>
-                  ) : null}
-
-                  {geoError ? <div className="text-xs text-yellow-200/80">{geoError}</div> : null}
-
-                  {coords && !zoneName ? (
-                    <div className="text-xs text-yellow-200/80">
-                      No estás dentro de una zona definida. Se usará el envío base ({money(baseFee)}).
-                    </div>
-                  ) : null}
-
-                  <Field value={street} onChange={setStreet} placeholder="Calle" required />
-                  <div className="grid grid-cols-2 gap-2">
-                    <Field value={number} onChange={setNumber} placeholder="Número" />
-                    <Field value={neighborhood} onChange={setNeighborhood} placeholder="Colonia" required />
-                  </div>
-                  <Field value={city} onChange={setCity} placeholder="Ciudad (opcional)" />
-
-                  {/* ✅ LISTA DE SUGERENCIAS */}
-                  {!selectedSuggestion && suggestions.length > 0 ? (
-                    <div className="rounded-2xl border border-white/10 bg-black/40 overflow-hidden">
-                      {suggestions.slice(0, 6).map((sug, idx) => (
+                      {addressConfirmed ? (
                         <button
-                          key={`${sug.lat}-${sug.lng}-${idx}`}
                           type="button"
-                          onClick={() => pickSuggestion(sug)}
-                          className="w-full text-left px-4 py-3 text-sm border-b border-white/5 hover:bg-white/5 transition"
+                          onClick={() => {
+                            // Permite “editar” otra vez
+                            setAddressConfirmed(false);
+                            setZoneName(null);
+                            setFeeLive(null);
+                            setBanner({ title: "Edita tu dirección", subtitle: "Selecciona otra opción si es necesario.", tone: "info" });
+                            window.setTimeout(() => setBanner(null), 2500);
+                          }}
+                          className="text-xs px-3 py-2 rounded-full border border-white/15 bg-white/10 hover:bg-white/15 transition"
                         >
-                          {sug.display}
+                          Cambiar
                         </button>
-                      ))}
+                      ) : null}
+                    </div>
+
+                    {addressConfirmed && selectedSuggestion?.display ? (
+                      <div className="mt-3 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/80">
+                        <div className="opacity-70">📍 Dirección seleccionada</div>
+                        <div className="mt-1">{selectedSuggestion.display}</div>
+                      </div>
+                    ) : null}
+
+                    {geoError ? <div className="mt-3 text-xs text-amber-200/90">{geoError}</div> : null}
+                  </div>
+
+                  <Field
+                    value={street}
+                    onChange={(v) => {
+                      setStreet(v);
+                      setSelectedSuggestion(null);
+                      setSuggestions([]);
+                      setCoords(null);
+                      setCoordsSource(null);
+                      setZoneName(null);
+                      setFeeLive(null);
+                      setAddressConfirmed(false);
+                    }}
+                    placeholder="Calle"
+                    required
+                  />
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field
+                      value={number}
+                      onChange={(v) => {
+                        setNumber(v);
+                        setSelectedSuggestion(null);
+                        setSuggestions([]);
+                        setCoords(null);
+                        setCoordsSource(null);
+                        setZoneName(null);
+                        setFeeLive(null);
+                        setAddressConfirmed(false);
+                      }}
+                      placeholder="Número"
+                    />
+                    <Field
+                      value={neighborhood}
+                      onChange={(v) => {
+                        setNeighborhood(v);
+                        setSelectedSuggestion(null);
+                        setSuggestions([]);
+                        setCoords(null);
+                        setCoordsSource(null);
+                        setZoneName(null);
+                        setFeeLive(null);
+                        setAddressConfirmed(false);
+                      }}
+                      placeholder="Colonia"
+                      required
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field
+                      value={city}
+                      onChange={(v) => {
+                        setCity(v);
+                        setAddressConfirmed(false);
+                      }}
+                      placeholder="Ciudad (opcional)"
+                    />
+                    <Field
+                      value={postalCode}
+                      onChange={(v) => {
+                        const cp = (v || "").replace(/[^\d]/g, "").slice(0, 5);
+                        setPostalCode(cp);
+                        setAddressConfirmed(false);
+                      }}
+                      placeholder="Código postal (opcional)"
+                    />
+                  </div>
+
+                  {/* Sugerencias (más “clickeables”) */}
+                  {suggestions.length > 0 && !addressConfirmed ? (
+                    <div className="rounded-2xl border border-amber-400/40 bg-amber-400/10 overflow-hidden">
+                      <div className="px-4 py-2 text-xs text-amber-50/90 border-b border-amber-400/30 flex items-center gap-2">
+                        <span>👇</span>
+                        <span className="font-semibold">Selecciona tu domicilio</span>
+                        <span className="text-amber-50/70 font-normal">(esto define tu envío)</span>
+                      </div>
+                      <div className="max-h-56 overflow-auto">
+                        {suggestions.map((sug, idx) => (
+                          <button
+                            key={`${sug.lat}-${sug.lng}-${idx}`}
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              pickSuggestion(sug);
+                            }}
+                            className="w-full text-left px-4 py-3 text-sm hover:bg-amber-400/10 transition border-b border-amber-400/15 last:border-b-0"
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className="mt-0.5">📍</div>
+                              <div className="min-w-0">
+                                <div className="text-white/90 line-clamp-2">{sug.display || `Opción ${idx + 1}`}</div>
+                                <div className="text-[11px] text-amber-50/70 mt-1">Toca para confirmar</div>
+                              </div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
 
                   <textarea
-                    className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm min-h-[84px] outline-none placeholder:text-white/35 focus:border-white/20"
+                    className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm min-h-[84px] outline-none placeholder:text-white/35 focus:border-white/25"
                     placeholder="Referencias (opcional)"
                     value={references}
                     onChange={(e) => setReferences(e.target.value)}
@@ -608,7 +869,7 @@ export default function CheckoutPage() {
               ) : null}
 
               <textarea
-                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm min-h-[84px] outline-none placeholder:text-white/35 focus:border-white/20"
+                className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm min-h-[84px] outline-none placeholder:text-white/35 focus:border-white/25"
                 placeholder="Notas (opcional)"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
@@ -617,13 +878,15 @@ export default function CheckoutPage() {
               <button
                 className="w-full rounded-2xl border px-4 py-4 text-sm font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={placeOrder}
-                disabled={placing || !restaurant || !validRestaurant || empty || !canOrder}
-                style={{ borderColor: `${accent}55`, backgroundColor: `${accent}18` }}
+                disabled={confirmDisabled}
+                style={{ borderColor: `${accent}85`, backgroundColor: `${accent}24` }}
               >
-                {placing ? "Enviando..." : "Confirmar pedido"}
+                {placing ? "Enviando..." : deliveryType === "delivery" && !addressConfirmed ? "Confirma tu dirección" : "Confirmar pedido"}
               </button>
 
-              {!validRestaurant ? <div className="text-xs text-white/45">Tu carrito es de otro restaurante. Vacíalo para continuar.</div> : null}
+              {!validRestaurant ? (
+                <div className="text-xs text-white/45">Tu carrito es de otro restaurante. Vacíalo para continuar.</div>
+              ) : null}
             </section>
           </div>
 
@@ -641,14 +904,33 @@ export default function CheckoutPage() {
                   <span>{money(subtotal)}</span>
                 </div>
 
-                <div className="flex justify-between text-sm text-white/75">
-                  <span>Envío</span>
+                <div
+                  className={[
+                    "flex justify-between text-sm transition-all duration-300",
+                    flashFee ? "text-emerald-300 scale-[1.03]" : "text-white/75",
+                  ].join(" ")}
+                >
+                  <span className="flex items-center gap-2">
+                    Envío
+                    {flashFee ? (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full border border-emerald-400/50 bg-emerald-400/15 text-emerald-100">
+                        Actualizado
+                      </span>
+                    ) : null}
+                  </span>
                   <span>{deliveryType === "delivery" ? money(deliveryFee) : money(0)}</span>
                 </div>
 
                 {deliveryType === "delivery" ? (
-                  <div className="text-[11px] text-white/45">
-                    {feeLive != null ? `Tarifa por zona${zoneName ? ` (${zoneName})` : ""}.` : `Tarifa base del restaurante.`}
+                  <div className="text-[11px] text-white/50">
+                    {addressConfirmed ? (
+                      <>
+                        {zoneName ? `Zona: ${zoneName}. ` : "Fuera de zona. "}
+                        {feeLive != null ? "Tarifa por zona aplicada." : "Tarifa base aplicada."}
+                      </>
+                    ) : (
+                      "Selecciona tu domicilio para calcular tu tarifa."
+                    )}
                   </div>
                 ) : null}
 
@@ -672,7 +954,7 @@ export default function CheckoutPage() {
                 <Link
                   href={slug ? `/r/${slug}` : "/"}
                   className="flex-1 px-4 py-3 rounded-2xl border text-sm font-semibold text-center transition"
-                  style={{ borderColor: `${accent}55`, backgroundColor: `${accent}18` }}
+                  style={{ borderColor: `${accent}85`, backgroundColor: `${accent}24` }}
                 >
                   Menú
                 </Link>

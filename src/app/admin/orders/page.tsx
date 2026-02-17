@@ -85,6 +85,26 @@ function deriveAccent(r?: Restaurant | null) {
   return r?.accent_color || "#ff3b30";
 }
 
+/** ✅ cache helpers (ANTI-FLASH) */
+function accentKey(slug: string) {
+  return `accent_color:${slug}`;
+}
+function readCachedAccent(slug: string) {
+  try {
+    if (typeof window === "undefined") return null;
+    const v = window.localStorage.getItem(accentKey(slug));
+    return v && v.startsWith("#") ? v : null;
+  } catch {
+    return null;
+  }
+}
+function writeCachedAccent(slug: string, color: string) {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(accentKey(slug), color);
+  } catch {}
+}
+
 function StatusPill({ status, accent }: { status: string; accent: string }) {
   const label = (STATUS_LABEL as any)[status] ?? status;
 
@@ -191,7 +211,21 @@ export default function AdminOrders() {
       return null;
     }
 
-    return r as Restaurant;
+    // ✅ ANTI-FLASH: si hay cache, úsalo como "preload" antes del DB
+    const rr = r as Restaurant;
+    const cached = rr.slug ? readCachedAccent(rr.slug) : null;
+
+    const merged: Restaurant = {
+      ...rr,
+      accent_color: cached ?? rr.accent_color ?? null,
+    };
+
+    // ✅ cachea el valor real del DB (si viene)
+    if (rr.slug && rr.accent_color) {
+      writeCachedAccent(rr.slug, rr.accent_color);
+    }
+
+    return merged;
   }
 
   async function loadAll(forceRestaurant?: Restaurant) {

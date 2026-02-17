@@ -134,6 +134,26 @@ function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+/** ✅ cache helpers (ANTI-FLASH) */
+function accentKey(slug: string) {
+  return `accent_color:${slug}`;
+}
+function readCachedAccent(slug: string) {
+  try {
+    if (typeof window === "undefined") return null;
+    const v = window.localStorage.getItem(accentKey(slug));
+    return v && v.startsWith("#") ? v : null;
+  } catch {
+    return null;
+  }
+}
+function writeCachedAccent(slug: string, color: string) {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(accentKey(slug), color);
+  } catch {}
+}
+
 export default function AdminSettings() {
   const router = useRouter();
 
@@ -159,7 +179,9 @@ export default function AdminSettings() {
   const [brandIcon, setBrandIcon] = useState("🍽️");
   const [brandText, setBrandText] = useState("");
   const [brandTagline, setBrandTagline] = useState("Ordena directo • Sin comisiones");
-  const [accentColor, setAccentColor] = useState("#ff3b30");
+
+  // ✅ ANTI-FLASH: NO iniciar en rojo duro
+  const [accentColor, setAccentColor] = useState("#22c55e"); // fallback neutro
 
   // ✅ envío
   const [deliveryFee, setDeliveryFee] = useState<string>("0");
@@ -198,12 +220,19 @@ export default function AdminSettings() {
       const rr = r as Restaurant;
       setRestaurant(rr);
 
+      // ✅ ANTI-FLASH: si hay cache por slug, úsalo antes de setear el de DB
+      const cached = readCachedAccent(rr.slug);
+      if (cached) setAccentColor(cached);
+
       setBrandMode(safeMode(rr.brand_mode));
       setLogoUrl(rr.logo_url || "");
       setBrandIcon(rr.brand_icon || "🍽️");
       setBrandText(rr.brand_text || rr.name || "");
       setBrandTagline(rr.brand_tagline || "Ordena directo • Sin comisiones");
-      setAccentColor(rr.accent_color || "#ff3b30");
+
+      const dbAccent = rr.accent_color || "#ff3b30";
+      setAccentColor(dbAccent);
+      writeCachedAccent(rr.slug, dbAccent);
 
       setDeliveryFee(String(Number(rr.delivery_fee ?? 0)));
 
@@ -216,6 +245,13 @@ export default function AdminSettings() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ✅ Si el usuario cambia el color, cachearlo al vuelo (antes de guardar)
+  useEffect(() => {
+    if (!restaurant?.slug) return;
+    if (!accentColor || !accentColor.startsWith("#")) return;
+    writeCachedAccent(restaurant.slug, accentColor);
+  }, [restaurant?.slug, accentColor]);
 
   const previewRestaurant = useMemo(() => {
     if (!restaurant) return null;
@@ -320,6 +356,9 @@ export default function AdminSettings() {
       pushToast("❌ No se pudo guardar", error.message);
       return;
     }
+
+    // ✅ cachea también al guardar
+    writeCachedAccent(restaurant.slug, accentColor);
 
     pushToast("✅ Guardado", "Cambios aplicados correctamente.");
   }
@@ -481,12 +520,20 @@ export default function AdminSettings() {
                 <input
                   type="color"
                   value={accentColor}
-                  onChange={(e) => setAccentColor(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setAccentColor(v);
+                    if (restaurant?.slug) writeCachedAccent(restaurant.slug, v);
+                  }}
                   className="h-12 w-14 rounded-xl border border-white/10 bg-black/40"
                 />
                 <input
                   value={accentColor}
-                  onChange={(e) => setAccentColor(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setAccentColor(v);
+                    if (restaurant?.slug && v.startsWith("#")) writeCachedAccent(restaurant.slug, v);
+                  }}
                   className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none"
                   placeholder="#ff3b30"
                 />

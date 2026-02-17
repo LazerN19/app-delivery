@@ -9,6 +9,38 @@ function isLikelyHtmlOrXml(t: string) {
   return s.startsWith("<!doctype") || s.startsWith("<html") || s.startsWith("<?xml") || s.startsWith("<");
 }
 
+function scoreResult(x: any, q: string) {
+  const d = String(x.display_name || "").toLowerCase();
+  const a = x.address || {};
+  const ql = (q || "").toLowerCase();
+
+  let s = 0;
+
+  // ciudad
+  if (d.includes("hidalgo del parral")) s += 6;
+  if (d.includes("parral")) s += 3;
+
+  const road = String(a.road || "").toLowerCase();
+  const suburb = String(a.suburb || a.neighbourhood || a.quarter || "").toLowerCase();
+  const postcode = String(a.postcode || "").toLowerCase();
+
+  if (road && ql.includes(road)) s += 4;
+  if (suburb && ql.includes(suburb)) s += 3;
+  if (postcode && ql.includes(postcode)) s += 6;
+
+  // importancia del proveedor
+  const imp = Number(x.importance || 0);
+  s += imp;
+
+  // pequeña preferencia si parece calle
+  const cls = String(x.class || "").toLowerCase();
+  const typ = String(x.type || "").toLowerCase();
+  if (cls === "highway") s += 1.5;
+  if (typ.includes("residential") || typ.includes("tertiary") || typ.includes("secondary")) s += 1;
+
+  return s;
+}
+
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -23,7 +55,6 @@ export async function GET(req: Request) {
 
     const r = await fetch(url, {
       headers: {
-        // Nominatim es delicado con headers; estos ayudan a que no responda HTML raro
         "User-Agent": "siteapp.mx delivery (contact: admin@siteapp.mx)",
         "Accept": "application/json",
         "Referer": "https://siteapp.mx/",
@@ -33,17 +64,11 @@ export async function GET(req: Request) {
 
     const text = await r.text();
 
-    // Si Nominatim respondió HTML/XML o error, NO intentes JSON.parse
+    // Si Nominatim respondió HTML/XML o error, devuelve ok:false para que el front lo trate como servicio saturado
     if (!r.ok || isLikelyHtmlOrXml(text)) {
       return NextResponse.json(
-        {
-          ok: true,
-          found: false,
-          results: [],
-          // útil para debug rápido (no expone todo)
-          meta: { status: r.status, blocked: true },
-        },
-        { status: 200 }
+        { ok: false, error: "provider_blocked", results: [], meta: { status: r.status } },
+        { status: 429 }
       );
     }
 
@@ -52,13 +77,13 @@ export async function GET(req: Request) {
       data = JSON.parse(text);
     } catch {
       return NextResponse.json(
-        { ok: true, found: false, results: [], meta: { status: r.status, parse_failed: true } },
-        { status: 200 }
+        { ok: false, error: "parse_failed", results: [], meta: { status: r.status } },
+        { status: 502 }
       );
     }
 
     if (!Array.isArray(data) || data.length === 0) {
-      return NextResponse.json({ ok: true, found: false, results: [] });
+      return NextResponse.json({ ok: true, found: false, results: [] }, { status: 200 });
     }
 
     // filtro extra: quedarnos con resultados que digan Parral en address/display
@@ -69,16 +94,23 @@ export async function GET(req: Request) {
       return d.includes("parral") || city.includes("parral") || d.includes("hidalgo del parral");
     });
 
-    const out = (filtered.length ? filtered : data).map((x: any) => ({
+    const base = filtered.length ? filtered : data;
+
+    // Rankeo
+    const ranked = base
+      .map((x: any) => ({ x, score: scoreResult(x, q0) }))
+      .sort((a: any, b: any) => b.score - a.score)
+      .map((o: any) => o.x);
+
+    const out = ranked.map((x: any) => ({
       lat: Number(x.lat),
       lng: Number(x.lon),
       display: x.display_name,
       raw: x,
     }));
 
-    return NextResponse.json({ ok: true, found: true, results: out });
-  } catch (e: any) {
-    // Nunca devuelvas HTML: siempre JSON
+    return NextResponse.json({ ok: true, found: true, results: out }, { status: 200 });
+  } catch {
     return NextResponse.json({ ok: false, error: "geocode_failed" }, { status: 500 });
   }
 }
