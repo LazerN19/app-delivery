@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCart } from "@/components/cart/CartProvider";
 import { supabase } from "@/lib/supabaseClient";
 import { getOpenStatus } from "@/lib/hours";
@@ -16,13 +16,19 @@ type Restaurant = {
   is_active: boolean;
   hours: any;
 
-  // branding
   logo_url: string | null;
   brand_icon: string | null;
   brand_text: string | null;
   brand_tagline: string | null;
   accent_color: string | null;
   brand_mode: string | null;
+};
+
+type GeoResult = {
+  lat: number;
+  lng: number;
+  display: string;
+  raw?: any;
 };
 
 function money(n: number) {
@@ -51,7 +57,6 @@ function getBrand(r: Restaurant) {
   if (mode === "logo_text" && logo) return { kind: "logo_text" as const, logo, icon, text, tagline };
   if (mode === "icon_text") return { kind: "icon_text" as const, logo, icon, text, tagline };
 
-  // auto
   if (logo) return { kind: "logo_text" as const, logo, icon, text, tagline };
   if (icon) return { kind: "icon_text" as const, logo, icon, text, tagline };
   return { kind: "text" as const, logo, icon, text, tagline };
@@ -68,24 +73,14 @@ const MX_WA_PREFIX_UI = "+52 1 ";
 
 function enforceMxPrefixUI(v: string) {
   const raw = (v || "").trim();
-
-  // deja +, dígitos y espacios
   const cleaned = raw.replace(/[^\d+ ]/g, "");
-
-  // dígitos completos para normalizar
   let digits = cleaned.replace(/[^\d]/g, "");
-
-  // si el usuario pegó 52..., 521..., o +52 1..., quitamos prefijos
   digits = digits.replace(/^52/, "");
   digits = digits.replace(/^1/, "");
-
-  // limitar a 10 dígitos (MX)
   digits = digits.slice(0, 10);
-
   return MX_WA_PREFIX_UI + digits;
 }
 
-// Para guardar siempre bien en DB (WhatsApp MX): +521XXXXXXXXXX
 function toMxWhatsAppE164(uiPhone: string) {
   const digits = (uiPhone || "").replace(/[^\d]/g, "");
   let local = digits.replace(/^52/, "").replace(/^1/, "");
@@ -93,11 +88,6 @@ function toMxWhatsAppE164(uiPhone: string) {
   return local ? `+521${local}` : "";
 }
 
-/**
- * ✅ IMPORTANTE:
- * Field debe estar FUERA de CheckoutPage, para que NO se remonte en cada render.
- * Si está dentro, React lo desmonta/monta y el input pierde foco (solo deja 1 letra).
- */
 function Field({
   value,
   onChange,
@@ -143,22 +133,32 @@ export default function CheckoutPage() {
   const [street, setStreet] = useState("");
   const [number, setNumber] = useState("");
   const [neighborhood, setNeighborhood] = useState("");
-  const [city, setCity] = useState("");
+  const [city, setCity] = useState(""); // opcional
   const [references, setReferences] = useState("");
 
   const [notes, setNotes] = useState("");
   const [placing, setPlacing] = useState(false);
 
-  // ✅ ubicación + fee en vivo
+  // coords
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [coordsSource, setCoordsSource] = useState<"auto" | null>(null);
+
+  // fee live
   const [feeLive, setFeeLive] = useState<number | null>(null);
   const [zoneName, setZoneName] = useState<string | null>(null);
-  const [locLoading, setLocLoading] = useState(false);
-  const [locError, setLocError] = useState<string | null>(null);
+
+  // geocode UI
+  const [geoLoading, setGeoLoading] = useState(false);
+  const [geoError, setGeoError] = useState<string | null>(null);
+
+  // ✅ sugerencias + selección
+  const [suggestions, setSuggestions] = useState<GeoResult[]>([]);
+  const [selectedSuggestion, setSelectedSuggestion] = useState<GeoResult | null>(null);
+  const lastGeoQueryRef = useRef<string>("");
 
   const validRestaurant = !!slug && cart.restaurantSlug === slug;
 
-  // cargar restaurante + branding
+  // cargar restaurante
   useEffect(() => {
     if (!slug) return;
 
@@ -167,9 +167,7 @@ export default function CheckoutPage() {
 
       const { data, error } = await supabase
         .from("restaurants")
-        .select(
-          "name,slug,delivery_fee,is_active,hours,logo_url,brand_icon,brand_text,brand_tagline,accent_color,brand_mode"
-        )
+        .select("name,slug,delivery_fee,is_active,hours,logo_url,brand_icon,brand_text,brand_tagline,accent_color,brand_mode")
         .eq("slug", slug)
         .single();
 
@@ -187,7 +185,6 @@ export default function CheckoutPage() {
   }, [slug]);
 
   const accent = deriveAccent(restaurant);
-
   const open = useMemo(() => getOpenStatus(restaurant?.hours), [restaurant?.hours]);
   const canOrder = !!restaurant?.is_active && open.isOpen;
 
@@ -202,29 +199,92 @@ export default function CheckoutPage() {
 
   const empty = cart.items.length === 0;
 
-  async function useMyLocation() {
-    setLocError(null);
-    setLocLoading(true);
+  // ✅ AUTO: buscar sugerencias por lo que escriben (tolerante)
+  useEffect(() => {
+    if (!slug) return;
+    if (deliveryType !== "delivery") return;
 
-    if (!navigator.geolocation) {
-      setLocLoading(false);
-      setLocError("Tu navegador no soporta ubicación.");
+    // reset si no hay colonia
+    if (!neighborhood.trim()) {
+      setGeoLoading(false);
+      setGeoError(null);
+      setSuggestions([]);
+      setSelectedSuggestion(null);
+      setCoords(null);
+      setCoordsSource(null);
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        setCoords({ lat, lng });
-        setLocLoading(false);
-      },
-      () => {
-        setLocLoading(false);
-        setLocError("No pude obtener tu ubicación. Revisa permisos de GPS.");
-      },
-      { enableHighAccuracy: true, timeout: 12000 }
-    );
+    // Si el usuario edita, invalidamos selección previa
+    setSelectedSuggestion(null);
+
+    // arma query: con calle+colonia+ciudad si existe, pero permite abreviaciones porque nominatim “fuzzea” algo
+    const c = (city.trim() || "Hidalgo del Parral").trim();
+    const s = street.trim();
+    const n = number.trim();
+    const col = neighborhood.trim();
+
+    // ✅ para ayudar: si solo ponen colonia, que también funcione
+    const q = [s ? `${s}${n ? ` ${n}` : ""}` : "", col, c].filter(Boolean).join(", ");
+
+    // no repetir mismo query
+    if (lastGeoQueryRef.current === q) return;
+    lastGeoQueryRef.current = q;
+
+    let cancelled = false;
+    setGeoError(null);
+
+    const t = setTimeout(async () => {
+      try {
+        setGeoLoading(true);
+        const r = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+        const j = await r.json();
+
+        if (cancelled) return;
+
+        if (!j?.ok || !Array.isArray(j.results)) {
+          setGeoLoading(false);
+          setSuggestions([]);
+          setGeoError("No pude ubicar la colonia. Intenta escribir un poco más.");
+          return;
+        }
+
+        const list: GeoResult[] = j.results
+          .map((x: any) => ({
+            lat: Number(x.lat),
+            lng: Number(x.lng),
+            display: String(x.display || ""),
+            raw: x.raw,
+          }))
+          .filter((x: GeoResult) => Number.isFinite(x.lat) && Number.isFinite(x.lng) && x.display);
+
+        setSuggestions(list);
+        setGeoLoading(false);
+
+        if (list.length === 0) {
+          setGeoError("No encontré coincidencias. Prueba con otro nombre o agrega la calle.");
+        }
+      } catch {
+        if (cancelled) return;
+        setGeoLoading(false);
+        setSuggestions([]);
+        setGeoError("Error consultando ubicación. Intenta de nuevo.");
+      }
+    }, 650);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [slug, deliveryType, neighborhood, street, number, city]);
+
+  // ✅ elegir sugerencia: se quitan las demás y se setean coords
+  function pickSuggestion(s: GeoResult) {
+    setSelectedSuggestion(s);
+    setSuggestions([]); // ✅ aquí se “quitan las demás”
+    setCoords({ lat: s.lat, lng: s.lng });
+    setCoordsSource("auto");
+    setGeoError(null);
   }
 
   // ✅ cotizar envío en vivo cuando hay coords y es delivery
@@ -290,7 +350,7 @@ export default function CheckoutPage() {
     const payloadItems = cart.items.map((i) => ({
       menu_item_id: i.id,
       qty: i.qty,
-      notes: notes.trim() || null, // fallback por ahora
+      notes: notes.trim() || null,
     }));
 
     const address =
@@ -301,16 +361,16 @@ export default function CheckoutPage() {
             neighborhood: neighborhood.trim(),
             city: city.trim(),
             references: references.trim(),
-            // ✅ para fee real en backend
             lat: coords?.lat ?? null,
             lng: coords?.lng ?? null,
+            coords_source: coordsSource,
           }
         : null;
 
     const { data, error } = await supabase.rpc("create_order", {
       p_restaurant_slug: slug,
       p_customer_name: name.trim(),
-      p_customer_phone: phoneE164, // ✅ SIEMPRE +521XXXXXXXXXX
+      p_customer_phone: phoneE164,
       p_delivery_type: deliveryType,
       p_address: address,
       p_payment_method: "cash",
@@ -338,7 +398,7 @@ export default function CheckoutPage() {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      {/* Fondo (igual que menú) */}
+      {/* Fondo */}
       <div
         className="pointer-events-none fixed inset-0 opacity-60"
         style={{
@@ -372,7 +432,6 @@ export default function CheckoutPage() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <div className="text-lg font-semibold tracking-tight">Checkout</div>
 
-                  {/* Estado abierto/cerrado */}
                   <span
                     className="inline-flex items-center gap-2 text-[11px] px-2.5 py-1 rounded-full border"
                     style={{ borderColor: st.border, backgroundColor: st.bg }}
@@ -398,38 +457,12 @@ export default function CheckoutPage() {
             Volver
           </Link>
         </div>
-
-        {/* Banner de problemas */}
-        {slug && cart.restaurantSlug && cart.restaurantSlug !== slug ? (
-          <div className="px-5 pb-4">
-            <div className="mx-auto max-w-4xl rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="font-medium">Tu carrito pertenece a otro restaurante.</div>
-              <div className="mt-3">
-                <button
-                  className="px-4 py-2 rounded-full border border-white/15 bg-white/10 hover:bg-white/15 transition text-sm"
-                  onClick={() => cart.clear()}
-                >
-                  Vaciar carrito
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
-
-        {restaurant && !canOrder ? (
-          <div className="px-5 pb-4">
-            <div className="mx-auto max-w-4xl rounded-2xl border border-white/10 bg-white/5 p-4">
-              <div className="font-medium">{restaurant.is_active ? "Restaurante cerrado" : "Restaurante no disponible"}</div>
-              <div className="text-sm text-white/70 mt-1">{open.reason}</div>
-            </div>
-          </div>
-        ) : null}
       </header>
 
       {/* Content */}
       <div className="relative mx-auto max-w-4xl px-5 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
-          {/* Left: forms */}
+          {/* Left */}
           <div className="lg:col-span-3 space-y-5">
             {/* Pedido */}
             <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
@@ -520,33 +553,21 @@ export default function CheckoutPage() {
               </div>
 
               <Field value={name} onChange={setName} placeholder="Tu nombre" required />
-
-              {/* ✅ Teléfono con prefijo +52 1 fijo */}
               <Field value={phone} onChange={(v) => setPhone(enforceMxPrefixUI(v))} placeholder="Teléfono" required type="tel" />
 
               {deliveryType === "delivery" ? (
                 <>
-                  {/* ✅ Ubicación GPS para fee real */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={useMyLocation}
-                      className="px-4 py-3 rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm"
-                      disabled={locLoading}
-                    >
-                      {locLoading ? "Obteniendo ubicación..." : "Usar mi ubicación (GPS)"}
-                    </button>
-
-                    {coords ? (
-                      <div className="text-xs text-white/60">
-                        Ubicación lista{zoneName ? ` · ${zoneName}` : ""}
-                      </div>
-                    ) : (
-                      <div className="text-xs text-white/50">Opcional, mejora el costo de envío.</div>
-                    )}
+                  <div className="text-xs text-white/55">
+                    {geoLoading ? "Buscando ubicación..." : selectedSuggestion ? "✅ Ubicación seleccionada." : "Escribe tu calle y colonia (puedes abreviar)."}
                   </div>
 
-                  {locError ? <div className="text-xs text-red-300">{locError}</div> : null}
+                  {selectedSuggestion ? (
+                    <div className="text-xs text-white/60">
+                      Seleccionado: <span className="text-white/80">{selectedSuggestion.display}</span>
+                    </div>
+                  ) : null}
+
+                  {geoError ? <div className="text-xs text-yellow-200/80">{geoError}</div> : null}
 
                   {coords && !zoneName ? (
                     <div className="text-xs text-yellow-200/80">
@@ -555,13 +576,27 @@ export default function CheckoutPage() {
                   ) : null}
 
                   <Field value={street} onChange={setStreet} placeholder="Calle" required />
-
                   <div className="grid grid-cols-2 gap-2">
                     <Field value={number} onChange={setNumber} placeholder="Número" />
                     <Field value={neighborhood} onChange={setNeighborhood} placeholder="Colonia" required />
                   </div>
-
                   <Field value={city} onChange={setCity} placeholder="Ciudad (opcional)" />
+
+                  {/* ✅ LISTA DE SUGERENCIAS */}
+                  {!selectedSuggestion && suggestions.length > 0 ? (
+                    <div className="rounded-2xl border border-white/10 bg-black/40 overflow-hidden">
+                      {suggestions.slice(0, 6).map((sug, idx) => (
+                        <button
+                          key={`${sug.lat}-${sug.lng}-${idx}`}
+                          type="button"
+                          onClick={() => pickSuggestion(sug)}
+                          className="w-full text-left px-4 py-3 text-sm border-b border-white/5 hover:bg-white/5 transition"
+                        >
+                          {sug.display}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
 
                   <textarea
                     className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm min-h-[84px] outline-none placeholder:text-white/35 focus:border-white/20"
@@ -588,13 +623,11 @@ export default function CheckoutPage() {
                 {placing ? "Enviando..." : "Confirmar pedido"}
               </button>
 
-              {!validRestaurant ? (
-                <div className="text-xs text-white/45">Tu carrito es de otro restaurante. Vacíalo para continuar.</div>
-              ) : null}
+              {!validRestaurant ? <div className="text-xs text-white/45">Tu carrito es de otro restaurante. Vacíalo para continuar.</div> : null}
             </section>
           </div>
 
-          {/* Right: summary */}
+          {/* Right */}
           <aside className="lg:col-span-2 space-y-5 lg:sticky lg:top-[92px] h-fit">
             <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
               <div className="flex items-center justify-between mb-3">
@@ -615,9 +648,7 @@ export default function CheckoutPage() {
 
                 {deliveryType === "delivery" ? (
                   <div className="text-[11px] text-white/45">
-                    {feeLive != null
-                      ? `Tarifa por zona${zoneName ? ` (${zoneName})` : ""}.`
-                      : `Tarifa base del restaurante.`}
+                    {feeLive != null ? `Tarifa por zona${zoneName ? ` (${zoneName})` : ""}.` : `Tarifa base del restaurante.`}
                   </div>
                 ) : null}
 
