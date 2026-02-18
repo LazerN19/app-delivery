@@ -33,7 +33,7 @@ type MenuItem = {
   price: number;
   image_url?: string | null;
   is_active?: boolean | null;
-  is_available?: boolean | null; // si existe, lo usamos; si no, no pasa nada
+  is_available?: boolean | null;
 };
 
 type Props = {
@@ -78,7 +78,6 @@ function getBrand(rest: Restaurant) {
   if (mode === "logo_text" && logo) return { kind: "logo_text" as const, logo, icon, text, tagline };
   if (mode === "icon_text") return { kind: "icon_text" as const, logo, icon, text, tagline };
 
-  // auto
   if (logo) return { kind: "logo_text" as const, logo, icon, text, tagline };
   if (icon) return { kind: "icon_text" as const, logo, icon, text, tagline };
   return { kind: "text" as const, logo, icon, text, tagline };
@@ -104,7 +103,7 @@ function statusStyles(isOpen: boolean) {
       };
 }
 
-/** ✅ Card reusable para no duplicar markup (Todo + Categoría) */
+/** ✅ Card reusable */
 function ItemCard({
   it,
   accent,
@@ -131,7 +130,6 @@ function ItemCard({
       ].join(" ")}
       style={{ boxShadow: `0 24px 60px rgba(0,0,0,0.45)` }}
     >
-      {/* ✅ FOTO: solo si existe. Si no, dejamos un espaciado fijo discreto (sin cuadro). */}
       {hasImage ? (
         <div className="mb-4">
           <div className="h-36 w-full rounded-2xl overflow-hidden border border-white/10 bg-white/5">
@@ -154,9 +152,7 @@ function ItemCard({
             ) : null}
           </div>
 
-          <p className="mt-2 text-sm text-white/60 leading-relaxed">
-            {clamp2(it.description) || "Descripción pendiente…"}
-          </p>
+          <p className="mt-2 text-sm text-white/60 leading-relaxed">{clamp2(it.description) || "Descripción pendiente…"}</p>
         </div>
 
         <div className="text-right shrink-0">
@@ -203,39 +199,33 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
   const [query, setQuery] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // ✅ Para que cambie solo al pasar el tiempo (cada 30s)
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const id = window.setInterval(() => setTick((t) => t + 1), 30_000);
     return () => window.clearInterval(id);
   }, []);
 
-  // 🔥 IMPORTANTÍSIMO: setear restaurantSlug en el provider
   useEffect(() => {
     if (restaurant?.slug) cart.setRestaurantSlug(restaurant.slug);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restaurant?.slug]);
 
-  // ✅ Estado abierto/cerrado usando tu hours
   const open = useMemo(() => getOpenStatus(restaurant?.hours), [restaurant?.hours, tick]);
   const canOrder = Boolean(restaurant?.is_active) && Boolean(open?.isOpen);
 
   const st = statusStyles(Boolean(open?.isOpen));
   const deliveryFee = Number(restaurant.delivery_fee ?? 0) || 0;
 
-  // Ordenar categorías
   const catsSorted = useMemo(() => {
     const arr = [...(categories || [])];
     arr.sort((a, b) => Number(a.sort_order ?? 9999) - Number(b.sort_order ?? 9999));
     return arr;
   }, [categories]);
 
-  // Tabs: Todo + categorías
   const tabs = useMemo(() => {
     return [{ id: "__all__", name: "Todo" } as Category, ...catsSorted];
   }, [catsSorted]);
 
-  // Filtrar items por búsqueda
   const filteredItems = useMemo(() => {
     const q = normalize(query);
     const base = items || [];
@@ -243,7 +233,6 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
     return base.filter((it) => normalize(it.name + " " + (it.description || "")).includes(q));
   }, [items, query]);
 
-  // Agrupar items por categoría
   const itemsByCat = useMemo(() => {
     const map = new Map<string, MenuItem[]>();
     for (const it of filteredItems) {
@@ -254,12 +243,6 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
     }
     return map;
   }, [filteredItems]);
-
-  // Items para una categoría seleccionada
-  const activeItems = useMemo(() => {
-    if (activeCat === "__all__") return [];
-    return itemsByCat.get(activeCat) || [];
-  }, [activeCat, itemsByCat]);
 
   const validRestaurantForCart = !cart.restaurantSlug || cart.restaurantSlug === restaurant.slug;
 
@@ -287,182 +270,225 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
 
       {/* Header */}
       <header className="sticky top-0 z-20 border-b border-white/10 bg-black/70 backdrop-blur-xl">
-        <div className="mx-auto max-w-5xl px-5 py-4 flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-3">
+        <div className="mx-auto max-w-5xl px-5 py-4">
+          {/* ✅ DESKTOP HEADER */}
+          <div className="hidden md:flex items-center justify-between gap-4">
+            <div className="min-w-0 flex items-center gap-3">
               {(brand.kind === "logo" || brand.kind === "logo_text") && brand.logo ? (
-                <div className="h-10 w-10 rounded-2xl border border-white/10 bg-white/5 overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
+                <div className="h-10 w-10 rounded-2xl border border-white/10 bg-white/5 overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.35)] shrink-0">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={brand.logo} alt="logo" className="h-full w-full object-cover" />
                 </div>
               ) : brand.kind === "icon" || brand.kind === "icon_text" ? (
                 <div
-                  className="h-10 w-10 rounded-2xl border border-white/10 bg-white/5 flex items-center justify-center text-xl shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
-                  style={{
-                    boxShadow: `0 12px 36px ${accent}20`,
-                    borderColor: `${accent}45`,
-                    backgroundColor: `${accent}12`,
-                  }}
+                  className="h-10 w-10 rounded-2xl border border-white/10 bg-white/5 flex items-center justify-center text-xl shadow-[0_10px_30px_rgba(0,0,0,0.35)] shrink-0"
+                  style={{ borderColor: `${accent}45`, backgroundColor: `${accent}12` }}
                 >
                   {brand.icon}
                 </div>
               ) : null}
 
               <div className="min-w-0">
-                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap min-w-0">
                   <h1 className="text-lg sm:text-xl font-semibold tracking-tight truncate">
                     {brand.kind === "logo" ? restaurant.name : brand.text}
                   </h1>
 
-                  {/* ✅ Pill de estado abierto/cerrado */}
                   <span
-                    className="inline-flex items-center gap-2 text-[11px] px-2.5 py-1 rounded-full border transition-all duration-300"
-                    style={{
-                      borderColor: st.border,
-                      backgroundColor: st.bg,
-                      color: st.text,
-                      transform: "translateZ(0)",
-                    }}
+                    className="inline-flex items-center gap-2 text-[11px] px-2.5 py-1 rounded-full border"
+                    style={{ borderColor: st.border, backgroundColor: st.bg, color: st.text }}
                     title={open?.reason || ""}
                   >
                     <span className="text-[10px]">{st.icon}</span>
                     <span className="font-medium">{st.label}</span>
                   </span>
 
-                  {/* Menú pill */}
                   <span
-                    className="hidden sm:inline-flex text-[11px] px-2 py-0.5 rounded-full border border-white/10 bg-white/5 text-white/70"
+                    className="inline-flex text-[11px] px-2.5 py-1 rounded-full border border-white/10 bg-white/5 text-white/70"
                     style={{ borderColor: `${accent}35`, backgroundColor: `${accent}10` }}
                   >
                     Menú
                   </span>
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <p className="text-xs text-white/60 truncate">{brand.tagline}</p>
+               <div className="mt-1.5 flex items-center gap-3 min-w-0">
+  <p className="text-xs text-white/60 truncate">{brand.tagline}</p>
+  {open?.reason ? (
+    <span className="text-xs truncate" style={{ color: st.sub }}>
+      {open.reason}
+    </span>
+  ) : null}
+</div>
 
-                  {/* ✅ Razón (cierra/abre) */}
-                  <span className="text-xs truncate transition-all duration-300" style={{ color: st.sub }}>
-                    {open?.reason || ""}
-                  </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 px-3 h-10 rounded-full border border-white/10 bg-white/5">
+                <span className="text-white/50 text-sm">🔎</span>
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Buscar..."
+                  className="w-56 bg-transparent outline-none text-sm placeholder:text-white/35"
+                />
+                {query ? (
+                  <button
+                    onClick={() => setQuery("")}
+                    className="text-[11px] px-2 py-1 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition"
+                  >
+                    Limpiar
+                  </button>
+                ) : null}
+              </div>
+
+              <button
+                onClick={() => setDrawerOpen(true)}
+                className="inline-flex items-center gap-2 px-4 h-10 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition"
+                style={{ borderColor: `${accent}35` }}
+              >
+                <span className="text-sm font-medium">Carrito</span>
+                <span
+                  className="text-xs px-2 py-0.5 rounded-full border border-white/10 bg-white/5"
+                  style={{ borderColor: `${accent}40`, backgroundColor: `${accent}14` }}
+                >
+                  {cart.count}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {/* ✅ MOBILE HEADER */}
+          <div className="md:hidden">
+            {/* Row 1 */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex items-center gap-3">
+                {(brand.kind === "logo" || brand.kind === "logo_text") && brand.logo ? (
+                  <div className="h-10 w-10 rounded-2xl border border-white/10 bg-white/5 overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.35)] shrink-0">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={brand.logo} alt="logo" className="h-full w-full object-cover" />
+                  </div>
+                ) : brand.kind === "icon" || brand.kind === "icon_text" ? (
+                  <div
+                    className="h-10 w-10 rounded-2xl border border-white/10 bg-white/5 flex items-center justify-center text-xl shadow-[0_10px_30px_rgba(0,0,0,0.35)] shrink-0"
+                    style={{ borderColor: `${accent}45`, backgroundColor: `${accent}12` }}
+                  >
+                    {brand.icon}
+                  </div>
+                ) : null}
+
+                <div className="min-w-0">
+                  <h1 className="text-lg font-semibold tracking-tight truncate">
+                    {brand.kind === "logo" ? restaurant.name : brand.text}
+                  </h1>
+                  <p className="text-xs text-white/60 truncate">{brand.tagline}</p>
                 </div>
               </div>
-            </div>
-          </div>
 
-          <div className="flex items-center gap-2">
-            {/* Search desktop */}
-            <div className="hidden md:flex items-center gap-2 px-3 py-2 rounded-full border border-white/10 bg-white/5">
-              <span className="text-white/50 text-sm">🔎</span>
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Buscar..."
-                className="w-48 bg-transparent outline-none text-sm placeholder:text-white/35"
-              />
-              {query ? (
-                <button
-                  onClick={() => setQuery("")}
-                  className="text-xs px-2 py-1 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition"
-                >
-                  Limpiar
-                </button>
-              ) : null}
-            </div>
-
-            <button
-              onClick={() => setDrawerOpen(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition shadow-[0_12px_40px_rgba(0,0,0,0.4)]"
-              style={{ borderColor: `${accent}35` }}
-            >
-              <span className="text-sm font-medium">Carrito</span>
-              <span
-                className="text-xs px-2 py-0.5 rounded-full border border-white/10 bg-white/5"
-                style={{ borderColor: `${accent}40`, backgroundColor: `${accent}14` }}
+              <button
+                onClick={() => setDrawerOpen(true)}
+                className="inline-flex items-center gap-2 px-4 h-10 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition shrink-0"
+                style={{ borderColor: `${accent}35` }}
               >
-                {cart.count}
-              </span>
-            </button>
-          </div>
-        </div>
+                <span className="text-sm font-medium">Carrito</span>
+                <span
+                  className="text-xs px-2 py-0.5 rounded-full border border-white/10 bg-white/5"
+                  style={{ borderColor: `${accent}40`, backgroundColor: `${accent}14` }}
+                >
+                  {cart.count}
+                </span>
+              </button>
+            </div>
 
-        {/* Aviso “cerrado” más visible */}
-        {!canOrder ? (
-          <div className="px-5 pb-4">
-            <div className="mx-auto max-w-5xl rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/75">
-              <div className="font-medium">
-                {restaurant?.is_active ? "Restaurante cerrado" : "Restaurante no disponible"}
+            {/* Row 2: pills */}
+            <div className="mt-3 flex items-center gap-2 flex-wrap">
+              <span
+                className="inline-flex items-center gap-2 text-[11px] px-3 py-1 rounded-full border"
+                style={{ borderColor: st.border, backgroundColor: st.bg, color: st.text }}
+                title={open?.reason || ""}
+              >
+                <span className="text-[10px]">{st.icon}</span>
+                <span className="font-medium">{st.label}</span>
+                {open?.reason ? <span className="text-white/55 font-normal">· {open.reason}</span> : null}
+              </span>
+
+              <span
+                className="inline-flex text-[11px] px-3 py-1 rounded-full border border-white/10 bg-white/5 text-white/70"
+                style={{ borderColor: `${accent}35`, backgroundColor: `${accent}10` }}
+              >
+                Menú
+              </span>
+            </div>
+
+            {/* Search mobile */}
+            <div className="mt-3">
+              <div className="flex items-center gap-2 px-4 py-3 rounded-2xl border border-white/10 bg-white/5">
+                <span className="text-white/50 text-sm">🔎</span>
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Buscar platillo..."
+                  className="w-full bg-transparent outline-none text-sm placeholder:text-white/35"
+                />
+                {query ? (
+                  <button
+                    onClick={() => setQuery("")}
+                    className="text-xs px-3 py-1 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition"
+                  >
+                    Limpiar
+                  </button>
+                ) : null}
               </div>
+            </div>
+          </div>
+
+          {/* Tabs (para ambos) */}
+          <div className="mt-3">
+            <div
+              className={[
+                "flex gap-2 overflow-x-auto no-scrollbar",
+                "select-none snap-x snap-mandatory",
+                "overscroll-x-contain overscroll-y-none touch-pan-x",
+              ].join(" ")}
+              style={{ WebkitOverflowScrolling: "touch", touchAction: "pan-x" }}
+            >
+              {tabs.map((c) => {
+                const active = c.id === activeCat;
+
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => setActiveCat(c.id)}
+                    className={[
+                      "relative px-4 py-2.5 rounded-full border text-sm whitespace-nowrap transition snap-start",
+                      active ? "bg-white/10 border-white/15" : "bg-white/5 border-white/10 hover:bg-white/10",
+                    ].join(" ")}
+                    style={active ? { borderColor: `${accent}55`, backgroundColor: `${accent}14` } : undefined}
+                  >
+                    {c.name}
+                    {active ? (
+                      <span
+                        className="absolute -bottom-[7px] left-1/2 -translate-x-1/2 h-[3px] w-10 rounded-full"
+                        style={{ backgroundColor: accent }}
+                      />
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Aviso “cerrado” */}
+          {!canOrder ? (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-white/75">
+              <div className="font-medium">{restaurant?.is_active ? "Restaurante cerrado" : "Restaurante no disponible"}</div>
               <div className="text-xs text-white/60 mt-1">{open?.reason || "No disponible"}</div>
             </div>
-          </div>
-        ) : null}
-
-        {/* Search mobile */}
-        <div className="md:hidden px-5 pb-4">
-          <div className="flex items-center gap-2 px-4 py-3 rounded-2xl border border-white/10 bg-white/5">
-            <span className="text-white/50 text-sm">🔎</span>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Buscar platillo..."
-              className="w-full bg-transparent outline-none text-sm placeholder:text-white/35"
-            />
-            {query ? (
-              <button
-                onClick={() => setQuery("")}
-                className="text-xs px-3 py-1 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 transition"
-              >
-                Limpiar
-              </button>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Tabs */}
-        <div className="px-5 pb-4">
-          <div
-            className={[
-              "mx-auto max-w-5xl flex gap-2 overflow-x-auto no-scrollbar",
-              "select-none",
-              "snap-x snap-mandatory",
-              "overscroll-x-contain overscroll-y-none",
-              "touch-pan-x",
-            ].join(" ")}
-            style={{
-              WebkitOverflowScrolling: "touch",
-              touchAction: "pan-x",
-            }}
-          >
-            {tabs.map((c) => {
-              const active = c.id === activeCat;
-
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => setActiveCat(c.id)}
-                  className={[
-                    "relative px-4 py-2 rounded-full border text-sm whitespace-nowrap transition",
-                    "snap-start",
-                    active ? "bg-white/10 border-white/15" : "bg-white/5 border-white/10 hover:bg-white/10",
-                  ].join(" ")}
-                  style={active ? { borderColor: `${accent}50`, backgroundColor: `${accent}14` } : undefined}
-                >
-                  {c.name}
-                  {active ? (
-                    <span
-                      className="absolute -bottom-[6px] left-1/2 -translate-x-1/2 h-[3px] w-10 rounded-full"
-                      style={{ backgroundColor: accent }}
-                    />
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
+          ) : null}
         </div>
       </header>
 
-      {/* Aviso si el carrito es de otro restaurante */}
+      {/* Aviso carrito otro restaurante */}
       {!validRestaurantForCart ? (
         <div className="mx-auto max-w-5xl px-5 pt-6">
           <div className="rounded-3xl border border-white/10 bg-white/5 p-5 text-white/75">
@@ -495,12 +521,13 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
             <p className="text-sm text-white/55">
               {activeCat === "__all__"
                 ? `${filteredItems.length} ${filteredItems.length === 1 ? "producto" : "productos"}`
-                : `${(itemsByCat.get(activeCat) || []).length} ${((itemsByCat.get(activeCat) || []).length === 1) ? "producto" : "productos"}`}
+                : `${(itemsByCat.get(activeCat) || []).length} ${
+                    (itemsByCat.get(activeCat) || []).length === 1 ? "producto" : "productos"
+                  }`}
             </p>
           </div>
         </div>
 
-        {/* VISTA TODO */}
         {activeCat === "__all__" ? (
           <div className="space-y-8">
             {catsSorted.map((cat) => {
@@ -539,7 +566,6 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
             ) : null}
           </div>
         ) : (
-          /* VISTA POR CATEGORÍA */
           <>
             {(() => {
               const activeItems = itemsByCat.get(activeCat) || [];
@@ -568,16 +594,14 @@ export default function MenuClient({ restaurant, categories, items }: Props) {
         <div className="mt-10 text-center text-xs text-white/40">App Elaborada por SiteApp.mx</div>
       </main>
 
-      {/* DRAWER CARRITO */}
+      {/* Drawer carrito */}
       <div className={["fixed inset-0 z-40", drawerOpen ? "" : "pointer-events-none"].join(" ")}>
-        {/* overlay */}
         <div
           className={["absolute inset-0 bg-black/60 transition-opacity", drawerOpen ? "opacity-100" : "opacity-0"].join(
             " "
           )}
           onClick={() => setDrawerOpen(false)}
         />
-        {/* panel */}
         <aside
           className={[
             "absolute right-0 top-0 h-full w-full sm:w-[420px] border-l border-white/10 bg-black/80 backdrop-blur-xl",

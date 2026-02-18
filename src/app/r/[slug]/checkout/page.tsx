@@ -95,22 +95,31 @@ function Field({
   placeholder,
   required,
   type = "text",
+  readOnly,
+  disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder: string;
   required?: boolean;
   type?: string;
+  readOnly?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <input
       type={type}
       value={value}
+      readOnly={readOnly}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
       placeholder={required ? `${placeholder} *` : placeholder}
       inputMode={type === "tel" ? "tel" : type === "number" ? "numeric" : undefined}
       autoComplete={type === "tel" ? "tel" : undefined}
-      className="w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none placeholder:text-white/35 focus:border-white/25"
+      className={[
+        "w-full rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm outline-none placeholder:text-white/35 focus:border-white/25",
+        disabled ? "opacity-75 cursor-not-allowed" : "",
+      ].join(" ")}
     />
   );
 }
@@ -135,7 +144,8 @@ export default function CheckoutPage() {
   const [number, setNumber] = useState("");
   const [neighborhood, setNeighborhood] = useState("");
   const [postalCode, setPostalCode] = useState("");
-  const [city, setCity] = useState("");
+  // ✅ Ciudad fija para que el grid no se vea "incompleto"
+  const [city, setCity] = useState("Hidalgo del Parral");
   const [references, setReferences] = useState("");
 
   const [notes, setNotes] = useState("");
@@ -212,7 +222,7 @@ export default function CheckoutPage() {
 
   const empty = cart.items.length === 0;
 
-  // ✅ CAMBIO: geocode SOLO por colonia + (CP opcional) + ciudad
+  // ✅ geocode SOLO por colonia + (CP opcional) + ciudad fija
   function buildGeoQuery() {
     const c = (city.trim() || "Hidalgo del Parral").trim();
     const col = neighborhood.trim();
@@ -233,7 +243,7 @@ export default function CheckoutPage() {
     lastGeoQueryRef.current = "";
   }
 
-  // ✅ auto geocode: SOLO colonia/cp/ciudad. Calle/número ya NO influyen
+  // ✅ auto geocode: SOLO colonia/cp/ciudad. Calle/número NO influyen
   useEffect(() => {
     if (!slug) return;
     if (deliveryType !== "delivery") return;
@@ -445,7 +455,8 @@ export default function CheckoutPage() {
         number: number.trim(),
         neighborhood: neighborhood.trim(),
         postal_code: postalCode.trim(),
-        city: city.trim(),
+        // ✅ fijo
+        city: city.trim() || "Hidalgo del Parral",
         references: references.trim(),
         lat: c.lat,
         lng: c.lng,
@@ -714,7 +725,7 @@ export default function CheckoutPage() {
 
               {deliveryType === "delivery" ? (
                 <>
-                  {/* BLOQUE DIRECCIÓN (más comercial) */}
+                  {/* BLOQUE DIRECCIÓN */}
                   <div className={`rounded-2xl border p-4 transition-all ${addrCardStyle}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div>
@@ -758,7 +769,7 @@ export default function CheckoutPage() {
                     {geoError ? <div className="mt-3 text-xs text-amber-200/90">{geoError}</div> : null}
                   </div>
 
-                  {/* ✅ Calle/numero YA NO resetean confirmación */}
+                  {/* Calle/numero NO resetean confirmación */}
                   <Field value={street} onChange={setStreet} placeholder="Calle" required />
 
                   <div className="grid grid-cols-2 gap-2">
@@ -767,7 +778,6 @@ export default function CheckoutPage() {
                       value={neighborhood}
                       onChange={(v) => {
                         setNeighborhood(v);
-                        // ✅ solo colonia cambia la ubicación/quote
                         setSelectedSuggestion(null);
                         setSuggestions([]);
                         setCoords(null);
@@ -781,28 +791,14 @@ export default function CheckoutPage() {
                     />
                   </div>
 
+                  {/* ✅ Ciudad fija + CP (ya no se ve “faltante”) */}
                   <div className="grid grid-cols-2 gap-2">
-                    <Field
-                      value={city}
-                      onChange={(v) => {
-                        setCity(v);
-                        // ✅ city afecta query
-                        setSelectedSuggestion(null);
-                        setSuggestions([]);
-                        setCoords(null);
-                        setCoordsSource(null);
-                        setZoneName(null);
-                        setFeeLive(null);
-                        setAddressConfirmed(false);
-                      }}
-                      placeholder="Ciudad (opcional)"
-                    />
+                    <Field value={city} onChange={() => {}} placeholder="Ciudad" readOnly disabled />
                     <Field
                       value={postalCode}
                       onChange={(v) => {
                         const cp = (v || "").replace(/[^\d]/g, "").slice(0, 5);
                         setPostalCode(cp);
-                        // ✅ CP afecta query
                         setSelectedSuggestion(null);
                         setSuggestions([]);
                         setCoords(null);
@@ -815,7 +811,7 @@ export default function CheckoutPage() {
                     />
                   </div>
 
-                  {/* Sugerencias (más “clickeables”) */}
+                  {/* Sugerencias */}
                   {suggestions.length > 0 && !addressConfirmed ? (
                     <div className="rounded-2xl border border-amber-400/40 bg-amber-400/10 overflow-hidden">
                       <div className="px-4 py-2 text-xs text-amber-50/90 border-b border-amber-400/30 flex items-center gap-2">
@@ -872,9 +868,7 @@ export default function CheckoutPage() {
                 {placing ? "Enviando..." : deliveryType === "delivery" && !addressConfirmed ? "Confirma tu dirección" : "Confirmar pedido"}
               </button>
 
-              {!validRestaurant ? (
-                <div className="text-xs text-white/45">Tu carrito es de otro restaurante. Vacíalo para continuar.</div>
-              ) : null}
+              {!validRestaurant ? <div className="text-xs text-white/45">Tu carrito es de otro restaurante. Vacíalo para continuar.</div> : null}
             </section>
           </div>
 
@@ -892,12 +886,7 @@ export default function CheckoutPage() {
                   <span>{money(subtotal)}</span>
                 </div>
 
-                <div
-                  className={[
-                    "flex justify-between text-sm transition-all duration-300",
-                    flashFee ? "text-emerald-300 scale-[1.03]" : "text-white/75",
-                  ].join(" ")}
-                >
+                <div className={["flex justify-between text-sm transition-all duration-300", flashFee ? "text-emerald-300 scale-[1.03]" : "text-white/75"].join(" ")}>
                   <span className="flex items-center gap-2">
                     Envío
                     {flashFee ? (
