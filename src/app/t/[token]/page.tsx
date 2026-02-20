@@ -18,20 +18,8 @@ export default async function TrackingPage(props: PageProps) {
 
   const supabase = getServerSupabase();
 
-  const { data, error } = await supabase
-    .from("orders")
-    .select(`
-      id, folio, status, created_at, delivery_type, address, total, subtotal, delivery_fee,
-      customer_name, customer_phone, notes, restaurant_id, public_tracking_token,
-      restaurants (
-        id, name, slug, logo_url, brand_icon, brand_text, brand_tagline, accent_color, brand_mode
-      ),
-      order_items (
-        id, name_snapshot, price_snapshot, qty, notes
-      )
-    `)
-    .eq("public_tracking_token", token)
-    .single();
+  // ✅ Nuevo: traer pedido por RPC (funciona en incógnito / anon)
+  const { data, error } = await supabase.rpc("get_public_order", { p_token: token });
 
   if (error || !data) {
     return (
@@ -43,5 +31,23 @@ export default async function TrackingPage(props: PageProps) {
     );
   }
 
-  return <TrackingClient initial={data as any} />;
+  // data viene como json (order + restaurant + items)
+  const order = data as any;
+
+  // ✅ Normalizamos al shape que ya usabas: restaurants + order_items
+  const normalized = {
+    ...order,
+    restaurants: order.restaurant ?? null,
+    order_items: Array.isArray(order.items)
+      ? order.items.map((it: any) => ({
+          id: it.id,
+          name_snapshot: it.name,
+          price_snapshot: it.price,
+          qty: it.qty,
+          notes: it.notes ?? null,
+        }))
+      : [],
+  };
+
+  return <TrackingClient initial={normalized as any} />;
 }
